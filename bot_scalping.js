@@ -124,6 +124,8 @@
     // ─── حماية متقدمة ──────────────────────────────────────────────
     MIN_CONFIDENCE_THRESHOLD: 75,          // حد الثقة الأدنى — يتحكم به سلايدر الواجهة
     GHOST_TRADE_ENABLED     : true,        // صفقة وهمية بعد أول خسارة
+    GHOST_TRIGGER_STREAK    : 2,           // ✅ [V13.6] فعّل Ghost فقط بعد N خسائر متتالية (2 بدل 1 — أسرع)
+    GHOST_MAX_CONSECUTIVE   : 1,           // ✅ [V13.6] عدد الصفقات الوهمية قبل العودة للحقيقي (1 بدل 2 — أسرع)
     RECALIBRATE_ON_STREAK   : 3,          // إعادة معايرة بعد N خسائر متتالية
     RECALIBRATE_DURATION_MS : 45000,      // مدة إعادة المعايرة القصوى (45 ثانية)
     RECALIBRATE_MIN_TREND_CANDLES : 3,    // عدد الشموع المتتالية المطلوبة لإنهاء إعادة المعايرة
@@ -153,9 +155,11 @@
     THREE_CANDLE_PEAK_WINDOW : 30,         // ✅ [V13.4] نافذة فحص القمة/القاع لنمط 3 شموع (30 بدل 10)
 
     // ─── [V13.4] تحسين فلتر الاتجاه + استنفاد اتجاهي + ثقة تكيفية ───────────
-    TREND_WINDOW_CANDLES    : 40,          // ✅ نافذة كشف الاتجاه (40 شمعة بدل 7 — ترى الاتجاه الكلي)
-    TREND_ATR_Z_THRESHOLD   : 0.8,         // ✅ قوة الاتجاه بوحدات ATR (z>0.8=صاعد، z<-0.8=هابط) — مطبّع بالتقلب
-    EXHAUSTION_COOLDOWN_MS  : 9000,        // ✅ بعد كشف الاستنفاد: امنع اتجاه الاستمرار 9ث (يمنع شراء القمة/بيع القاع)
+    TREND_WINDOW_CANDLES    : 24,          // ✅ [V13.6] نافذة كشف الاتجاه (24 — أقل لزوجة، يحجب أقل في التذبذب)
+    TREND_ATR_Z_THRESHOLD   : 0.9,         // ✅ [V13.6] قوة الاتجاه بوحدات ATR (0.9 — يحجب الترند الواضح فقط)
+    TREND_FILTER_MODE       : 'soft',      // ✅ [V13.6] 'soft'=خصم ثقة للمعاكس (يبقى سريعاً) | 'hard'=حظر تام
+    TREND_SOFT_PENALTY      : 12,          // ✅ [V13.6] خصم الثقة للإشارة المعاكسة في الوضع الناعم
+    EXHAUSTION_COOLDOWN_MS  : 4000,        // ✅ [V13.6] بعد الاستنفاد امنع اتجاه الاستمرار 4ث (كان 9 — أسرع)
     ADAPTIVE_CONF_ENABLED   : true,        // ✅ ثقة تكيفية — رفع العتبة للأنماط الخاسرة حياً
     ADAPTIVE_MIN_SAMPLES    : 6,           // الحد الأدنى من الصفقات قبل تفعيل التكيّف لكل نمط
     ADAPTIVE_CONF_PER_LOSS  : 6,           // رفع عتبة الثقة المطلوبة % لكل خسارة صافية للنمط
@@ -4120,22 +4124,17 @@
     // المستوحاة من BACKUP_bot.js: يقارن سعر الدخول مع السعر الحالي بعد انتهاء المدة
     function _isGhostTradeActive() {
       if (!CFG.GHOST_TRADE_ENABLED) return false;
-      // ✅ حد أقصى للصفقات الوهمية المتتالية — بعد 2 صفقة وهمية ننفذ حقيقية
-      if (_ghostConsecutive >= 2) {
+      // ✅ [V13.6] حد أقصى للصفقات الوهمية المتتالية (قابل للضبط — أقل = أسرع)
+      if (_ghostConsecutive >= CFG.GHOST_MAX_CONSECUTIVE) {
         _ghostTradeActive = false;
         _ghostConsecutive = 0;
-        addLog('👻 [GHOST] تم الوصول للحد الأقصى (2) — العودة للتداول الحقيقي', 'signal');
+        addLog('👻 [GHOST] اكتمل التحقق — العودة للتداول الحقيقي', 'signal');
         return false;
       }
-      // بعد خسارة واحدة → الصفقة التالية تكون وهمية
-      if (STATS.lossStreak === 1 && !_ghostWatching) {
+      // ✅ [V13.6] فعّل Ghost فقط بعد عتبة خسائر متتالية (2 بدل 1 — لا نُبطئ بعد خسارة مفردة)
+      if (STATS.lossStreak >= CFG.GHOST_TRIGGER_STREAK && !_ghostWatching) {
         _ghostTradeActive = true;
-        addLog('👻 [GHOST] تفعيل الصفقة الوهمية — خسارة واحدة', 'info');
-      }
-      // بعد خسارتين → صفقة وهمية ثانية
-      if (STATS.lossStreak === 2 && !_ghostWatching) {
-        _ghostTradeActive = true;
-        addLog('👻 [GHOST] تفعيل الصفقة الوهمية — خسارتين متتاليتين', 'info');
+        addLog('👻 [GHOST] تفعيل صفقة وهمية — ' + STATS.lossStreak + ' خسائر متتالية', 'info');
       }
       return _ghostTradeActive;
     }
@@ -4272,14 +4271,22 @@
           addLog('🚫 [PATTERN-OFF] ' + signal.pattern + ' معطّل مؤقتاً — معدل فوز حي منخفض', 'info');
           return;
         }
-        // فلتر ثقة أدنى — يتحكم به سلايدر الواجهة (+ تعديل تكيفي)
-        if (signal.confidence < _effThreshold) {
-          addLog('🔮 [SIGNAL-DISCARD] ' + signal.direction + ' | ثقة: ' + signal.confidence + '% < ' + _effThreshold + '% (تكيفي) | نمط: ' + signal.pattern, 'info');
-          return;
-        }
-        // فلتر الاتجاه — منع التداول عكس الاتجاه
+
+        // ✅ [V13.6] فلتر الاتجاه — وضعان: 'hard'=حظر تام | 'soft'=خصم ثقة (يبقى السكالبينغ سريعاً)
+        let _effConf = signal.confidence;
         if (!_trendAllows(signal.direction)) {
-          addLog('🚫 [TREND-BLOCK] ' + signal.direction + ' ممنوع — الاتجاه: ' + _lastTrendDirection, 'info');
+          if (CFG.TREND_FILTER_MODE === 'hard') {
+            addLog('🚫 [TREND-BLOCK] ' + signal.direction + ' ممنوع — الاتجاه: ' + _lastTrendDirection, 'info');
+            return;
+          }
+          // soft: اخصم من الثقة فقط — الإشارة المعاكسة القوية تمر، الضعيفة تُرفض بالعتبة
+          _effConf -= CFG.TREND_SOFT_PENALTY;
+          addLog('⚠️ [TREND-SOFT] ' + signal.direction + ' عكس الاتجاه ' + _lastTrendDirection + ' — خصم ' + CFG.TREND_SOFT_PENALTY + '% (ثقة: ' + _effConf + '%)', 'info');
+        }
+
+        // فلتر ثقة أدنى — يتحكم به سلايدر الواجهة (+ تعديل تكيفي + خصم الاتجاه الناعم)
+        if (_effConf < _effThreshold) {
+          addLog('🔮 [SIGNAL-DISCARD] ' + signal.direction + ' | ثقة: ' + _effConf + '% < ' + _effThreshold + '% | نمط: ' + signal.pattern, 'info');
           return;
         }
 
