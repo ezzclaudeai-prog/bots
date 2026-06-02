@@ -161,6 +161,12 @@
     ADAPTIVE_CONF_PER_LOSS  : 6,           // رفع عتبة الثقة المطلوبة % لكل خسارة صافية للنمط
     ADAPTIVE_DISABLE_WR     : 0.40,        // تعطيل النمط مؤقتاً إذا نزل معدل فوزه الحي تحت 40%
 
+    // ─── [V13.5 / المسار C] فلتر تأكيد الأوراكل (Latency lead confirmation) ──
+    ORACLE_CONFIRM_ENABLED  : true,        // ✅ لا تنفّذ نمطاً إلا إذا لم يعارضه ميل سعر الأوراكل اللحظي
+    ORACLE_CONFIRM_WINDOW_MS: 2500,        // نافذة تيكات الأوراكل المعتبرة (مللي ثانية)
+    ORACLE_CONFIRM_MIN_TICKS: 3,           // أقل عدد تيكات أوراكل مطلوب — وإلا fail-open (يسمح)
+    ORACLE_CONFIRM_K        : 1.0,         // الميل يُحسب معارِضاً فقط إذا تجاوز K×ضجيج التيك (يحجب التعارض الواضح فقط)
+
     // ─── Socket Stability ──────────────────────────────────────────────
     WS_SELF_PING_ENABLED    : false,       // ✅ إيقاف PING الخاص — المنصة تدير PING/PONG بنفسها
     WS_HEALTH_TIMEOUT_MS    : 25000,       // تحذير إذا لم تأتِ بيانات خلال 25 ثانية
@@ -1132,7 +1138,7 @@
         if (q1Match(bytes, Q1_SIG.TICK_ARRAY)) {
           try {
             const txt = new TextDecoder().decode(bytes), start = txt.indexOf('[[');
-            if (start >= 0) { const arr = JSON.parse(txt.slice(start)); const tick = extractTickFromArray(arr); if (tick) { onTick(tick.asset, tick.price, tick.ts); return; } }
+            if (start >= 0) { const arr = JSON.parse(txt.slice(start)); const tick = extractTickFromArray(arr); if (tick) { onTick(tick.asset, tick.price, tick.ts, wsRef && wsRef._dualRole); return; } }
           } catch (_) {}
         }
       }
@@ -1144,7 +1150,7 @@
       if (decoded !== null && typeof decoded === 'object') {
         if (evName==='successauth') { if (wsRef && wsRef===tradeWS) { _tradeSocketReady = true; addLog('✅ مقبس مصادَق', 'signal'); _startAdaptiveSigmaDecayTimerLocal(); } return; }
         const tick = extractTickFromArray(decoded);
-        if (tick) { onTick(tick.asset, tick.price, tick.ts); return; }
+        if (tick) { onTick(tick.asset, tick.price, tick.ts, wsRef && wsRef._dualRole); return; }
         if (evName==='chafor') { const cf = extractChafor(decoded); if (cf) { onChafor(cf.asset, cf.seconds); return; } }
         if (evName==='updateCharts' && Array.isArray(decoded)) {
           for (const chart of decoded) {
@@ -1169,7 +1175,7 @@
         if (evName==='successupdateBalance' && obj.balance !== undefined) { onBalanceUpdate(obj); return; }
         if (evName==='successopenOrder' && obj.id) { onOpenOrderSuccess(obj); return; }
         const tick = extractTickFromArray(Array.isArray(obj) ? obj : [obj]);
-        if (tick) { onTick(tick.asset, tick.price, tick.ts); return; }
+        if (tick) { onTick(tick.asset, tick.price, tick.ts, wsRef && wsRef._dualRole); return; }
         if (evName==='chafor') { const cf = extractChafor(Array.isArray(obj)?obj:[obj]); if (cf) onChafor(cf.asset, cf.seconds); }
         if (evName==='saveCharts') { const s = obj.settings || obj; _extractFastCloseAt(s, obj); }
       } catch (_) {}
@@ -1198,8 +1204,8 @@
     const evName = payload[0], data = payload[1];
     if (evName==='successauth') { if (wsRef && wsRef===tradeWS) { _tradeSocketReady = true; addLog('✅ مقبس مصادَق', 'signal'); _startAdaptiveSigmaDecayTimerLocal(); } return; }
     if (['updateStream','tick','quote','stream'].includes(evName)) {
-      const tick = extractTickFromArray(data); if (tick) { onTick(tick.asset, tick.price, tick.ts); return; }
-      if (Array.isArray(data)) { for (const item of data) { const t = extractTickFromArray(Array.isArray(item)?item:[item]); if (t) onTick(t.asset,t.price,t.ts); } }
+      const tick = extractTickFromArray(data); if (tick) { onTick(tick.asset, tick.price, tick.ts, wsRef && wsRef._dualRole); return; }
+      if (Array.isArray(data)) { for (const item of data) { const t = extractTickFromArray(Array.isArray(item)?item:[item]); if (t) onTick(t.asset,t.price,t.ts, wsRef && wsRef._dualRole); } }
     }
     if (evName==='chafor') { const cf = extractChafor(Array.isArray(data)?data:[data]); if (cf) onChafor(cf.asset, cf.seconds); }
     if (evName==='changeSymbol' && data?.asset) onActiveAsset(data.asset, 'changeSymbol');
@@ -1214,6 +1220,10 @@
           const signalAsset = typeof data[0]==='string' ? normalizeAsset(data[0]) : activeAsset;
           const signalPrice = typeof data[2]==='number' ? data[2] : 0;
           const signalDir = Array.isArray(data[1]) ? (data[1][0] > 0 ? 'BUY' : 'SELL') : null;
+          // ✅ [V13.5/المسار C] غذِّ مخزن الأوراكل بسعر signals (الفيد الأسرع يبثّه أساساً عبر هذا الحدث)
+          if (signalPrice > 0 && wsRef && wsRef._dualRole === 'oracle' && typeof DualWSSManager !== 'undefined') {
+            try { DualWSSManager.recordOracleTick(signalAsset, signalPrice); } catch(_) {}
+          }
           if (signalDir) {
             if (typeof DualWSSManager !== 'undefined') {
               DualWSSManager.onPlatformSignal({ asset: signalAsset, direction: signalDir, price: signalPrice, confidence: 75 });
@@ -1397,11 +1407,15 @@
     _rebuildPayloadCache(); updateHUD();
   }
 
-  function onTick(asset, price, serverTs) {
+  function onTick(asset, price, serverTs, srcRole) {
     // Simplified: just record tick data, update HUD price, feed diagnostic engine
     PERF.mark('tickRecv');
     if (!asset || !price || isNaN(price)) return;
     const a = normalizeAsset(asset), now = Date.now();
+    // ✅ [V13.5/المسار C] افصل تيكات الأوراكل (الفيد الأسرع) لفلتر التأكيد الكموني
+    if (srcRole === 'oracle') {
+      try { DualWSSManager.recordOracleTick(a, price); } catch(_) {}
+    }
     _lastTickMs = now;
     if (_streamStalled) {
       _streamStalled = false;
@@ -3915,6 +3929,7 @@
     let _lastExecutedPatternTs = 0; // وقت آخر تنفيذ نمط
     let _tradeWindowCount = 0;   // عدد الصفقات في النافذة الزمنية
     let _tradeWindowStart = 0;   // بداية نافذة العد
+    const _oracleTicks  = {};    // ✅ [V13.5/C] تيكات الأوراكل لكل زوج: { asset: [{p,t}, ...] }
 
     // ─── تهيئة النظام ──────────────────────────────────────────────────
     function init() {
@@ -3964,6 +3979,40 @@
           }
         }
       }
+    }
+
+    // ✅ [V13.5/المسار C] تسجيل تيك أوراكل (الفيد الأسرع) في مخزن مستقل
+    function recordOracleTick(asset, price) {
+      const a = normalizeAsset(asset);
+      const buf = _oracleTicks[a] || (_oracleTicks[a] = []);
+      const now = Date.now();
+      buf.push({ p: price, t: now });
+      // قصّ النافذة الزمنية + سقف طول
+      const cutoff = now - Math.max(CFG.ORACLE_CONFIRM_WINDOW_MS, 4000);
+      while (buf.length && buf[0].t < cutoff) buf.shift();
+      if (buf.length > 60) buf.shift();
+    }
+
+    // ✅ [V13.5/المسار C] هل يوافق ميل الأوراكل اللحظي اتجاه الإشارة؟
+    //   fail-open: إذا لا توجد بيانات أوراكل كافية → يسمح (لا يكسر السكالبينغ).
+    //   يحجب فقط التعارض الواضح (ميل يتجاوز K×ضجيج التيك عكس اتجاه الإشارة).
+    function oracleAgrees(direction, asset) {
+      if (!CFG.ORACLE_CONFIRM_ENABLED) return { agree: true, reason: 'disabled' };
+      const a = normalizeAsset(asset);
+      const all = _oracleTicks[a] || [];
+      const now = Date.now();
+      const win = all.filter(x => x.t >= now - CFG.ORACLE_CONFIRM_WINDOW_MS);
+      if (win.length < CFG.ORACLE_CONFIRM_MIN_TICKS) return { agree: true, reason: 'no-oracle' };
+      const slope = win[win.length - 1].p - win[0].p;
+      // ضجيج التيك = متوسط القيمة المطلقة لفروق التيكات المتتابعة
+      let noise = 0, k = 0;
+      for (let i = 1; i < win.length; i++) { noise += Math.abs(win[i].p - win[i-1].p); k++; }
+      noise = (k ? noise / k : 0) || 1e-9;
+      const threshold = CFG.ORACLE_CONFIRM_K * noise;
+      if (Math.abs(slope) < threshold) return { agree: true, reason: 'flat' }; // أوراكل محايد → اسمح
+      const oracleDir = slope > 0 ? 'BUY' : 'SELL';
+      const agree = oracleDir === direction;
+      return { agree, reason: agree ? 'confirm' : 'contradict', oracleDir, slope };
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -4231,6 +4280,13 @@
         // فلتر الاتجاه — منع التداول عكس الاتجاه
         if (!_trendAllows(signal.direction)) {
           addLog('🚫 [TREND-BLOCK] ' + signal.direction + ' ممنوع — الاتجاه: ' + _lastTrendDirection, 'info');
+          return;
+        }
+
+        // ✅ [V13.5/المسار C] فلتر تأكيد الأوراكل — احجب إذا عارض الفيد الأسرع الإشارة بوضوح
+        const _orc = oracleAgrees(signal.direction, signal.asset);
+        if (!_orc.agree) {
+          addLog('🔮 [ORACLE-VETO] ' + signal.direction + ' مرفوض — الأوراكل يتحرك ' + _orc.oracleDir + ' (تعارض كموني)', 'info');
           return;
         }
 
@@ -4801,6 +4857,8 @@
       registerSocket,
       unregisterSocket,
       recordMsgTs,
+      recordOracleTick,
+      oracleAgrees,
       onCandleClose,
       onPlatformSignal,
       getLatencyGap:     () => _latencyGap,
