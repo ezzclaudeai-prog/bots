@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "PO SPY DIAG — Dual-WSS Oracle Diagnostic",
+  "version": "2.0.0",
+  "description": "تشخيص هجين: يعترض كل WSS، يفك التشفير، يصنّف الأوراكل/المنفّذ، يقيس سبق الأوراكل (Lead/Lag)، ويلتقط السعر/التوكن/الكوكي/الصفقة/عمر الشمعة/التيكات/النقاط/الزوج — واجهة عائمة + تصدير. مراقبة سلبية.",
+  "permissions": ["scripting", "activeTab", "storage", "tabs", "downloads"],
+  "host_permissions": [
+    "*://*.pocketoption.com/*",
+    "*://*.po.market/*",
+    "*://*.pocketoption.org/*",
+    "*://*.po.trade/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PO SPY DIAG",
+    "default_icon": { "48": "icon.png", "128": "icon.png" }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.pocketoption.com/*",
+        "*://*.po.market/*",
+        "*://*.pocketoption.org/*",
+        "*://*.po.trade/*"
+      ],
+      "js": ["spy_injected.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "*://*.pocketoption.com/*",
+        "*://*.po.market/*",
+        "*://*.pocketoption.org/*",
+        "*://*.po.trade/*"
+      ],
+      "js": ["spy_content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    { "resources": ["icon.png", "spy_injected.js"], "matches": ["<all_urls>"] }
+  ],
+  "icons": { "48": "icon.png", "128": "icon.png" }
+}
