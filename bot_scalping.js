@@ -161,9 +161,14 @@
     TREND_SOFT_PENALTY      : 12,          // ✅ [V13.6] خصم الثقة للإشارة المعاكسة في الوضع الناعم
     EXHAUSTION_COOLDOWN_MS  : 4000,        // ✅ [V13.6] بعد الاستنفاد امنع اتجاه الاستمرار 4ث (كان 9 — أسرع)
     ADAPTIVE_CONF_ENABLED   : true,        // ✅ ثقة تكيفية — رفع العتبة للأنماط الخاسرة حياً
-    ADAPTIVE_MIN_SAMPLES    : 6,           // الحد الأدنى من الصفقات قبل تفعيل التكيّف لكل نمط
+    ADAPTIVE_MIN_SAMPLES    : 4,           // ✅ [V13.7] الحد الأدنى من الصفقات قبل تفعيل التكيّف (4 — يكبح الأنماط الخاسرة أسرع)
     ADAPTIVE_CONF_PER_LOSS  : 6,           // رفع عتبة الثقة المطلوبة % لكل خسارة صافية للنمط
     ADAPTIVE_DISABLE_WR     : 0.40,        // تعطيل النمط مؤقتاً إذا نزل معدل فوزه الحي تحت 40%
+
+    // ─── [V13.7] حارس الخسائر — يمنع تكرار نفس الصفقة الخاسرة (أهم درس من سجل 4 خسائر متتالية) ──
+    LOSS_PATTERN_COOLDOWN_MS: 35000,       // ✅ بعد خسارة (نمط+اتجاه): أوقف نفس التركيبة بالضبط هذه المدة
+    DIR_LOSS_BLOCK_N        : 2,           // ✅ بعد N خسائر متتالية في نفس الاتجاه: احجب الاتجاه
+    DIR_LOSS_BLOCK_MS       : 50000,       // ✅ مدة حجب الاتجاه الخاسر (يمنع 4 صفقات BUY خاسرة متتالية)
 
     // ─── [V13.5 / المسار C] فلتر تأكيد الأوراكل (Latency lead confirmation) ──
     ORACLE_CONFIRM_ENABLED  : true,        // ✅ لا تنفّذ نمطاً إلا إذا لم يعارضه ميل سعر الأوراكل اللحظي
@@ -265,6 +270,11 @@
   let _exhaustDir   = null;    // 'UP' أو 'DOWN' — اتجاه آخر استنفاد مكتشف
   let _exhaustUntil = 0;       // وقف اتجاه الاستمرار حتى هذا الوقت
   const _patternWL = {};       // { pattern: { w:عدد فوز, l:عدد خسارة } } — سجل حي لكل نمط
+  // ✅ [V13.7] حارس الخسائر
+  let _lossPatDirKey   = null; // 'pattern:DIR' لآخر صفقة خاسرة
+  let _lossPatDirUntil = 0;    // حتى متى نمنع تلك التركيبة
+  const _dirLossStreak = { BUY: 0, SELL: 0 }; // خسائر متتالية لكل اتجاه
+  const _dirBlockUntil = { BUY: 0, SELL: 0 }; // حجب اتجاه حتى وقت
   let _lastWsErrorMsgTs = 0;                // تقييد رسائل خطأ المقابس
   const _executorPool = new Map();           // تجمع مقابس المنفذ: ws → { origSend, connectedAt, lastActivity, authed }
   const _wsLastActivity = new Map();         // آخر نشاط لكل مقبس
@@ -4272,6 +4282,18 @@
           return;
         }
 
+        // ✅ [V13.7] حارس الخسائر — لا تكرّر نفس التركيبة الخاسرة (نمط+اتجاه)
+        if (_lossPatDirKey && Date.now() < _lossPatDirUntil &&
+            _lossPatDirKey === (signal.pattern + ':' + signal.direction)) {
+          addLog('🧯 [LOSS-PATTERN-COOL] ' + signal.pattern + ' ' + signal.direction + ' موقوف مؤقتاً — خسر للتو', 'info');
+          return;
+        }
+        // ✅ [V13.7] حجب الاتجاه بعد خسائر متتالية فيه
+        if (Date.now() < (_dirBlockUntil[signal.direction] || 0)) {
+          addLog('🧯 [DIR-LOSS-BLOCK] ' + signal.direction + ' محجوب — خسائر متتالية في الاتجاه', 'info');
+          return;
+        }
+
         // ✅ [V13.6] فلتر الاتجاه — وضعان: 'hard'=حظر تام | 'soft'=خصم ثقة (يبقى السكالبينغ سريعاً)
         let _effConf = signal.confidence;
         if (!_trendAllows(signal.direction)) {
@@ -4521,7 +4543,17 @@
         const prevBody = Math.abs(prev.close - prev.open);
         const currBody = Math.abs(curr.close - curr.open);
 
+        // ✅ [V13.7] موقع السعر في المدى الأخير — لرفض الشراء عند القمة/البيع عند القاع
+        let _posInRange = 0.5;
+        if (candles.length >= 10) {
+          const _rp = candles.slice(-CFG.THREE_CANDLE_PEAK_WINDOW).map(c => c.close);
+          const _mn = Math.min(..._rp), _mx = Math.max(..._rp), _rg = _mx - _mn;
+          if (_rg > 0) _posInRange = (curr.close - _mn) / _rg;
+        }
+
         if (!prev.isBullish && curr.isBullish && currBody > prevBody * 1.2) {
+          // ✅ [V13.7] لا تشترِ ابتلاعاً صعودياً عند قمة المدى (سبب خسائر شراء القمة)
+          if (_posInRange > CFG.THREE_CANDLE_PEAK_REJECT) return null;
           const trendBonus = _lastTrendDirection === 'UP' ? CFG.ENGULFING_TREND_BONUS : (_lastTrendDirection === 'DOWN' ? -15 : 0);
           // مكافأة حجم الابتلاع — إذا كان جسم الشمعة > 2× السابقة
           const sizeBonus = currBody > prevBody * 2 ? CFG.ENGULFING_SIZE_BONUS : 0;
@@ -4537,6 +4569,8 @@
         }
 
         if (prev.isBullish && !curr.isBullish && currBody > prevBody * 1.2) {
+          // ✅ [V13.7] لا تبِع ابتلاعاً هبوطياً عند قاع المدى
+          if (_posInRange < (1 - CFG.THREE_CANDLE_PEAK_REJECT)) return null;
           const trendBonus = _lastTrendDirection === 'DOWN' ? CFG.ENGULFING_TREND_BONUS : (_lastTrendDirection === 'UP' ? -15 : 0);
           const sizeBonus = currBody > prevBody * 2 ? CFG.ENGULFING_SIZE_BONUS : 0;
           const conf = Math.max(55, Math.min(95, CFG.ENGULFING_BASE_CONF + trendBonus + sizeBonus));
@@ -4885,9 +4919,8 @@
       resetConsecutiveOnLoss: () => { _consecutiveSameDir = 0; _lastTradeDirection = null; },
       onTradeResult: (win, direction) => {
         // ✅ [V13.4] سجّل نتيجة النمط الحي للثقة التكيفية (النمط متاح في هذا النطاق)
+        const _pat = (() => { try { return (typeof _lastExecutedPattern === 'string' && _lastExecutedPattern) ? _lastExecutedPattern.split(':')[0] : null; } catch(_) { return null; } })();
         try {
-          const _pat = (typeof _lastExecutedPattern === 'string' && _lastExecutedPattern)
-            ? _lastExecutedPattern.split(':')[0] : null;
           if (_pat) {
             _recordPatternResult(_pat, win);
             const s = _patternWL[_pat];
@@ -4895,13 +4928,33 @@
                    ' | الحي: ' + s.w + 'ف/' + s.l + 'خ', 'info');
           }
         } catch(_) {}
+
+        const _now = Date.now();
         if (!win) {
+          // ✅ [V13.7] حارس الخسائر — امنع تكرار نفس النمط+الاتجاه الخاسر
+          if (_pat && direction) {
+            _lossPatDirKey = _pat + ':' + direction;
+            _lossPatDirUntil = _now + CFG.LOSS_PATTERN_COOLDOWN_MS;
+          }
+          // ✅ [V13.7] عدّاد خسائر الاتجاه — احجب الاتجاه بعد N خسائر متتالية فيه
+          if (direction === 'BUY' || direction === 'SELL') {
+            _dirLossStreak[direction] = (_dirLossStreak[direction] || 0) + 1;
+            _dirLossStreak[direction === 'BUY' ? 'SELL' : 'BUY'] = 0;
+            if (_dirLossStreak[direction] >= CFG.DIR_LOSS_BLOCK_N) {
+              _dirBlockUntil[direction] = _now + CFG.DIR_LOSS_BLOCK_MS;
+              addLog('🧯 [DIR-LOSS-BLOCK] حجب ' + direction + ' لمدة ' + (CFG.DIR_LOSS_BLOCK_MS/1000) + 'ث — ' + _dirLossStreak[direction] + ' خسائر متتالية في الاتجاه', 'error');
+            }
+          }
           // خسارة → إعادة تعيين العداد المتتالي (لأن الاتجاه فشل)
           _consecutiveSameDir = 0;
           _lastTradeDirection = null;
           addLog('📊 [CONSEC-RESET] إعادة تعيين العداد المتتالي — خسارة في اتجاه ' + (direction || '?'), 'info');
+        } else {
+          // ✅ [V13.7] فوز → صفّر حراس الخسائر
+          _lossPatDirKey = null; _lossPatDirUntil = 0;
+          _dirLossStreak.BUY = 0; _dirLossStreak.SELL = 0;
+          _dirBlockUntil.BUY = 0; _dirBlockUntil.SELL = 0;
         }
-        // فوز: لا نعيد التعيين — العداد يُحدّث في _processQueue
       },
     };
   })();
