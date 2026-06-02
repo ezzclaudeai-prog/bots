@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 14mm 12mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Noto Naskh Arabic', 'Noto Sans Arabic UI', sans-serif;
+    color: #1f2933; line-height: 1.7; font-size: 12px;
+    direction: rtl;
+  }
+  .cover {
+    background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
+    color: #fff; border-radius: 16px; padding: 28px 26px; margin-bottom: 18px;
+  }
+  .cover h1 { margin: 0 0 6px; font-size: 26px; }
+  .cover .sub { font-size: 13px; opacity: .9; }
+  .cover .pill { display: inline-block; background: rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.3);
+    padding: 3px 12px; border-radius: 20px; font-size: 11px; margin-top: 10px; }
+  h2 { font-size: 17px; color: #0b3d5c; border-right: 5px solid #2c8fd6; padding-right: 10px; margin: 22px 0 10px; }
+  h3 { font-size: 14px; color: #14517a; margin: 14px 0 6px; }
+  code, .mono { font-family: 'Noto Sans Mono','DejaVu Sans Mono', monospace; direction: ltr; unicode-bidi: embed; }
+
+  .card { border:1px solid #e3e8ee; border-radius:12px; padding:12px 14px; margin:10px 0; background:#fbfcfe; }
+  .legend { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 4px; }
+  .tag { padding:3px 10px; border-radius:8px; font-size:11px; font-weight:700; color:#fff; }
+  .ok   { background:#16a34a; } .warn { background:#d97706; } .bad { background:#dc2626; }
+  .info { background:#2563eb; } .grayb{ background:#64748b; }
+
+  table { width:100%; border-collapse:collapse; margin:10px 0; font-size:11px; }
+  th,td { border:1px solid #d7dee6; padding:7px 9px; text-align:right; }
+  th { background:#0b3d5c; color:#fff; }
+  tr:nth-child(even) td { background:#f4f7fa; }
+  .c-ok{ color:#16a34a; font-weight:700;} .c-bad{ color:#dc2626; font-weight:700;} .c-warn{ color:#d97706; font-weight:700;}
+
+  .flow {
+    background:#0f1b2d; color:#e6edf3; border-radius:12px; padding:16px;
+    font-family:'Noto Sans Mono','DejaVu Sans Mono',monospace; direction:ltr; text-align:left;
+    font-size:10.5px; line-height:1.5; white-space:pre; overflow:hidden;
+  }
+  .codebox { background:#1e293b; color:#e2e8f0; border-radius:10px; padding:10px 12px; direction:ltr;
+    font-family:'Noto Sans Mono','DejaVu Sans Mono',monospace; font-size:10px; line-height:1.5; white-space:pre-wrap; margin:8px 0; }
+  .codebox .ln { color:#64748b; }
+  .codebox .kw { color:#7dd3fc; } .codebox .cm { color:#86efac; } .codebox .st{color:#fca5a5;}
+
+  .box2 { display:flex; gap:12px; }
+  .box2 > div { flex:1; border-radius:12px; padding:12px; }
+  .left { background:#e7f6ec; border:1px solid #b6e2c4; }
+  .right{ background:#fdeаeа; background:#fdeaea; border:1px solid #f4c0c0; }
+  .note { background:#fff7ed; border:1px solid #fed7aa; border-radius:12px; padding:12px 14px; margin:12px 0; }
+  .note b { color:#b45309; }
+  .step { background:#eef2ff; border:1px solid #c7d2fe; border-radius:10px; padding:8px 12px; margin:6px 0; }
+  .step .n { display:inline-block; width:22px;height:22px;line-height:22px;text-align:center;background:#4f46e5;color:#fff;border-radius:50%;font-weight:700;margin-left:8px; font-family:monospace;}
+  .small { font-size:10.5px; color:#52606d; }
+  .footer{ text-align:center; color:#94a3b8; font-size:10px; margin-top:18px; border-top:1px solid #e3e8ee; padding-top:8px;}
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>🔮 محرّك الأوراكل — كيف طُبّق وكيف يعمل</h1>
+  <div class="sub">بوت السكالبينغ V13.6 · شرح بصري مبسّط لفكرة Dual-WSS / Latency</div>
+  <span class="pill">الزوج: PocketOption OTC · الفريم: 1–5ث</span>
+  <span class="pill">إعداد: تحليل الكود الفعلي</span>
+</div>
+
+<div class="legend">
+  <span class="tag ok">✓ مطبّق صحيح</span>
+  <span class="tag warn">◑ جزئي</span>
+  <span class="tag bad">✗ غير مطبّق / شكلي</span>
+  <span class="tag info">i إضافة V13.5</span>
+</div>
+
+<h2>1) الفكرة ببساطة: ما هو «الأوراكل»؟</h2>
+<div class="card">
+الأوراكل = <b>مقبس WebSocket ثانٍ</b> متصل بخادم سريع (<span class="mono">events-po.com</span>) يصل سعره <b>قبل</b> مقبس التنفيذ (الديمو).
+الفكرة الأصلية: نستغل هذا «السبق» لتنفيذ صفقة في اتجاه الحركة قبل أن يعكسها فيد الديمو.
+<br><br>
+<b>الحالة الفعلية في كودك:</b> الأوراكل مُستخدَم كـ <span class="c-warn">فلتر تأكيد (Veto)</span> — يصوّت بنعم/لا على إشارة نمط الشموع — وليس كمولّد صفقات. (تفصيل في صفحة 2).
+</div>
+
+<h2>2) المعمارية: مقبسان يُعترضان ويُوسمان</h2>
+<div class="flow">            المتصفح (صفحة PocketOption)
+                       |
+        +--------------+---------------+
+        |   اعتراض WebSocket (Hook)     |
+        +--------------+---------------+
+        |                              |
+        v                              v
+ +----------------+           +----------------------+
+ |  WSS-A أوراكل   |           |  WSS-B منفّذ          |
+ |  events-po.com  |           |  demo-api-eu.po.market|
+ |  (الأسرع)       |           |  (تنفيذ الصفقات)      |
+ +-------+--------+           +-----------+----------+
+   role='oracle'                  role='executor'
+   (سطر 784)                       (سطر 788)
+         |                              |
+         | حدث: signals                 | updateStream + history
+         | ["#ASSET",[[1,1]],2.0338]    |
+         v                              v
+ recordOracleTick()              onTick() -> شموع
+ _oracleTicks[asset]             candleBuffers[asset]
+         |                              |
+         +--------------+---------------+
+                        v
+            نمط الشموع يولّد اشارة (BUY/SELL)
+                        v
+            oracleAgrees() ?  -- لا --> رفض [ORACLE-VETO]
+                        | نعم
+                        v
+            تنفيذ عبر WSS-B فقط (الديمو)</div>
+
+<h2>3) كيف «يقرأ» الكود سعر الأوراكل — خطوة بخطوة</h2>
+
+<div class="step"><span class="n">1</span> <b>توسيم المقبس:</b> أي اتصال إلى <span class="mono">events-po</span> يُعلَّم أوراكل.</div>
+<div class="codebox"><span class="cm">// سطر 784</span>
+<span class="kw">if</span> (urlStr.includes(<span class="st">'events-po'</span>)) ws._dualRole = <span class="st">'oracle'</span>;
+<span class="kw">if</span> (_isTradeSocket(urlStr))           ws._dualRole = <span class="st">'executor'</span>;</div>
+
+<div class="step"><span class="n">2</span> <b>التقاط السعر</b> من حدث <span class="mono">signals</span> (الحقل الثالث = السعر):</div>
+<div class="codebox"><span class="cm">// سطر 1219-1229</span>
+<span class="kw">if</span> (evName===<span class="st">'signals'</span>) {
+  <span class="kw">const</span> price = data[<span class="st">2</span>];          <span class="cm">// 2.03384  ← السعر الحي</span>
+  <span class="kw">if</span> (price > 0 && wsRef._dualRole===<span class="st">'oracle'</span>)
+     DualWSSManager.recordOracleTick(asset, price);
+}</div>
+
+<div class="step"><span class="n">3</span> <b>التخزين</b> في مخزن مستقل (لا يختلط بتيكات الديمو):</div>
+<div class="codebox"><span class="cm">// سطر 3989</span>
+<span class="kw">function</span> recordOracleTick(asset, price) {
+  buf.push({ p: price, t: Date.now() });   <span class="cm">// آخر 2.5ث فقط</span>
+}</div>
+
+<div class="step"><span class="n">4</span> <b>المنطق:</b> هل ميل الأوراكل يوافق اتجاه الإشارة؟</div>
+<div class="codebox"><span class="cm">// سطر 4003</span>
+<span class="kw">function</span> oracleAgrees(direction, asset) {
+  <span class="kw">if</span> (تيكات < 3) <span class="kw">return</span> {agree:<span class="st">true</span>};   <span class="cm">// لا بيانات → اسمح (fail-open)</span>
+  slope = آخر سعر − أول سعر;                <span class="cm">// ميل الأوراكل</span>
+  <span class="kw">if</span> (|slope| < ضجيج) <span class="kw">return</span> {agree:<span class="st">true</span>}; <span class="cm">// مسطّح → اسمح</span>
+  oracleDir = slope>0 ? <span class="st">'BUY'</span> : <span class="st">'SELL'</span>;
+  <span class="kw">return</span> {agree: oracleDir === direction};   <span class="cm">// يطابق؟</span>
+}</div>
+
+<div class="step"><span class="n">5</span> <b>البوابة:</b> لو عارض الأوراكل → <span class="mono">🔮 [ORACLE-VETO]</span> رفض. وإلا → تنفيذ على الديمو فقط (سطر 4742).</div>
+
+<h2>4) «تأكيد» وليس «مراجحة» — الفرق الجوهري</h2>
+<div class="box2">
+  <div class="left">
+    <b>المراجحة الحقيقية (الفكرة)</b><br>
+    الأوراكل يرى الحركة أولاً<br>↓<br>
+    ننفّذ فوراً على سبقه<br>↓<br>
+    الأوراكل = <b>مُولِّد إشارة</b> (هجومي)
+  </div>
+  <div class="right">
+    <b>المطبّق فعلاً (V13.5)</b><br>
+    نمط الشموع يولّد الإشارة أولاً<br>↓<br>
+    نسأل الأوراكل: هل توافق؟<br>↓<br>
+    الأوراكل = <b>فلتر/Veto</b> (دفاعي)
+  </div>
+</div>
+
+<h2>5) جدول المطابقة الكامل مع الفكرة الأصلية</h2>
+<table>
+  <tr><th>البند المطلوب</th><th>الحالة</th><th>الموقع في الكود</th></tr>
+  <tr><td>مقبسان (أوراكل/منفّذ) عبر اعتراض</td><td class="c-ok">✓ صحيح</td><td>سطر 784–789</td></tr>
+  <tr><td>parse <span class="mono">signals</span> (قراءة سعر الأوراكل)</td><td class="c-ok">✓ صحيح (V13.5)</td><td>سطر 1219–1229</td></tr>
+  <tr><td>parse <span class="mono">updateHistoryNewFast</span> (بناء الشموع)</td><td class="c-ok">✓ صحيح</td><td>سطر 1176</td></tr>
+  <tr><td><span class="mono">saveCharts</span> تجاهل للتداول</td><td class="c-ok">✓ صحيح</td><td>سطر 1184 (UI فقط)</td></tr>
+  <tr><td>التنفيذ حصراً عبر الديمو (WSS-B)</td><td class="c-ok">✓ صحيح</td><td>سطر 4742</td></tr>
+  <tr><td>ترويسة Origin صحيحة</td><td class="c-ok">✓ ضمنياً</td><td>اعتراض = Origin تلقائي</td></tr>
+  <tr><td>محدِّد ديناميكي بين 6 سيرفرات</td><td class="c-warn">◑ جزئي</td><td>failover للمنفّذ فقط</td></tr>
+  <tr><td>التزامن الاصطناعي (Synthetic Desync)</td><td class="c-bad">✗ شكلي</td><td>سطر 4775 (90ms ثابتة)</td></tr>
+  <tr><td>مراجحة كمونية حقيقية (lead/lag)</td><td class="c-bad">✗ غير مطبّق</td><td>الأوراكل تأكيد فقط</td></tr>
+  <tr><td>تهدئة عشوائية 2–7 دقائق</td><td class="c-bad">✗ غير مطبّق</td><td>سكالبينغ سريع بدلاً منها</td></tr>
+  <tr><td>فلتر احتمالي إسقاط 18–20%</td><td class="c-bad">✗ غير موجود</td><td>لا كود له</td></tr>
+</table>
+
+<h2>6) ⚠️ الاكتشاف الحاسم من سجلاتك</h2>
+<div class="note">
+في <b>كل سجلاتك</b> لم يظهر <span class="mono">🔮 [ORACLE-VETO]</span> ولا مرة واحدة. المعنى:
+المخزن <span class="mono">_oracleTicks</span> بقي <b>فارغاً</b> → أي أن <span class="mono">events-po</span> <b>لم يبثّ أسعاراً</b> لأزواجك (BHDCNY/CADCHF/AEDCNY) في جلساتك.<br><br>
+<b>النتيجة:</b> الفلتر مُطبّق وصحيح برمجياً، لكنه عملياً <b>خامل (fail-open دائماً)</b> لأن الأوراكل لا يغذّيه ببيانات. <b>هذه هي الحلقة المفقودة</b> بينك وبين المراجحة الحقيقية.
+</div>
+
+<h2>7) الخلاصة</h2>
+<table>
+  <tr><th>السؤال</th><th>الجواب</th></tr>
+  <tr><td>هل التوصيل/التوجيه مطبّق صحيح؟</td><td class="c-ok">✓ نعم (اعتراض + توسيم + تنفيذ ديمو)</td></tr>
+  <tr><td>هل الكود يقرأ سعر الأوراكل؟</td><td class="c-warn">✓ برمجياً نعم — لكن لم تصله بيانات</td></tr>
+  <tr><td>هل هي مراجحة كمونية حقيقية؟</td><td class="c-bad">✗ لا — فلتر تأكيد فقط</td></tr>
+  <tr><td>الفلتر الاحتمالي / تهدئة 2–7د؟</td><td class="c-bad">✗ غير موجودة</td></tr>
+</table>
+
+<div class="card">
+<b>الخطوة التالية المقترحة:</b> إضافة <b>سطر تشخيص</b> يطبع كل 10ث عدد تيكات الأوراكل + أسماء أحداث <span class="mono">events-po</span> الواردة — لنحسم: هل المشكلة أن الأوراكل لا يُرسل، أم أن الاعتراض لا يلتقطه؟ هذه خطوة إلزامية قبل بناء «المسار A» (المراجحة الكاملة).
+</div>
+
+<div class="footer">بوت السكالبينغ V13.6 · شرح محرّك الأوراكل · مُولّد من تحليل الكود الفعلي</div>
+
+</body>
+</html>
