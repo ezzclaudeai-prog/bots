@@ -143,7 +143,7 @@
     CONSEC_CONF_PENALTY     : 20,         // خصم من الثقة لكل صفقة متتالية في نفس الاتجاه (20% → 80% تصبح 60%)
     PATTERN_REARM_ENABLED   : true,       // حاجز إعادة تسليح النمط — نفس النمط لا يكرر خلال فترة الحماية
     PATTERN_REARM_MIN_MS    : 10000,      // الحد الأدنى لنافذة إعادة التسليح (10 ثانية) — تقليل الانتظار على الفريمات القصيرة
-    MAX_TRADES_PER_WINDOW   : 4,          // أقصى عدد صفقات في النافذة الزمنية (4 بدل 3 — المزيد من الفرص)
+    MAX_TRADES_PER_WINDOW   : 12,         // ✅ [V14.5] سقف الصفقات/دقيقة (12 بدل 4 — تسريع السكالبينغ)
     TRADE_WINDOW_MS         : 60000,      // نافذة العد: 60 ثانية
 
     // ─── تحسين الأنماط ──────────────────────────────────────────────────
@@ -4196,9 +4196,9 @@
 
     // ─── التهدئة التكيفية — حسب مدة الشمعة ────────────────────────────
     function getAdaptiveCooldown() {
-      const periodMs = (candlePeriod > 0 ? candlePeriod : 15) * 1000;
-      const cd = Math.max(CFG.TRADE_COOLDOWN_FLOOR_MS, Math.round(periodMs * CFG.TRADE_COOLDOWN_RATIO));
-      // إضافة تباين عشوائي بسيط ±20%
+      // ✅ [V14.5] التهدئة تتبع مدة الصفقة (سكالبينغ) لا مدة الشمعة الطويلة → أسرع بكثير
+      const durMs = (_snapTradeDuration(_tradeDuration || candlePeriod || 3)) * 1000;
+      const cd = Math.max(CFG.TRADE_COOLDOWN_FLOOR_MS, Math.round(durMs * CFG.TRADE_COOLDOWN_RATIO));
       const variance = cd * 0.2 * (Math.random() - 0.5) * 2;
       return Math.round(cd + variance);
     }
@@ -4616,7 +4616,17 @@
         const prevBody = Math.abs(prev.close - prev.open);
         const currBody = Math.abs(curr.close - curr.open);
 
+        // ✅ [V14.5] موقع السعر في المدى الأخير — لرفض شراء القمة/بيع القاع (سبب خسائر الابتلاع)
+        let _posIR = 0.5;
+        if (candles.length >= 10) {
+          const _rp = candles.slice(-CFG.THREE_CANDLE_PEAK_WINDOW).map(c => c.close);
+          const _mn = Math.min(..._rp), _mx = Math.max(..._rp), _rg = _mx - _mn;
+          if (_rg > 0) _posIR = (curr.close - _mn) / _rg;
+        }
+
         if (!prev.isBullish && curr.isBullish && currBody > prevBody * 1.2) {
+          // ✅ [V14.5] لا تشترِ ابتلاعاً صعودياً عند قمة المدى
+          if (_posIR > CFG.THREE_CANDLE_PEAK_REJECT) return null;
           const trendBonus = _lastTrendDirection === 'UP' ? CFG.ENGULFING_TREND_BONUS : (_lastTrendDirection === 'DOWN' ? -15 : 0);
           // مكافأة حجم الابتلاع — إذا كان جسم الشمعة > 2× السابقة
           const sizeBonus = currBody > prevBody * 2 ? CFG.ENGULFING_SIZE_BONUS : 0;
@@ -4632,6 +4642,8 @@
         }
 
         if (prev.isBullish && !curr.isBullish && currBody > prevBody * 1.2) {
+          // ✅ [V14.5] لا تبِع ابتلاعاً هبوطياً عند قاع المدى
+          if (_posIR < (1 - CFG.THREE_CANDLE_PEAK_REJECT)) return null;
           const trendBonus = _lastTrendDirection === 'DOWN' ? CFG.ENGULFING_TREND_BONUS : (_lastTrendDirection === 'UP' ? -15 : 0);
           const sizeBonus = currBody > prevBody * 2 ? CFG.ENGULFING_SIZE_BONUS : 0;
           const conf = Math.max(55, Math.min(95, CFG.ENGULFING_BASE_CONF + trendBonus + sizeBonus));
