@@ -198,6 +198,10 @@
     ETE_WAIT_MAX_MS         : 5000,        // حدّ أقصى للانتظار (لفريمات 15ث+)
     ETE_POLL_MS             : 120,         // فحص الموافقة كل N ميلي ثانية
     ETE_ON_TIMEOUT          : 'skip',      // عند انتهاء المهلة دون توافق: 'skip' إلغاء | 'enter' دخول
+    // [V19] دخول فوري للقناعة العالية (يعالج الدخول المتأخر) + حماية عكس الشات
+    ETE_INSTANT_CONF        : 88,          // ثقة ≥ هذه → دخول فوري بلا انتظار توقيت
+    ETE_BLOCK_WEAK_COUNTER_CHAT : true,    // امنع: عكس الشات + بلا دعم منصة + زخم ضعيف (مصدر معظم الخسائر)
+    ETE_STRONG_REL          : 0.000040,   // أدنى زخم نسبي يُجيز التداول عكس الشات (40e-6)
     // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
     ORACLE_LAB_ENABLED      : true,        // ✅ تسجيل خام: يربط كل صفقة بمصدرها ونتيجتها (آمن)
     ORACLE_LAB_REPORT_EVERY : 10,          // اطبع جدول الأداء كل N صفقة
@@ -5008,10 +5012,10 @@
         if (_queueTimer) clearTimeout(_queueTimer);
         _queueTimer = setTimeout(() => {
           _queueTimer = null;
-          _timedExecute(signal.direction, signal.asset, tradeAmount);
+          _timedExecute(signal.direction, signal.asset, tradeAmount, signal.confidence);
         }, totalDelay);
       } else {
-        _timedExecute(signal.direction, signal.asset, tradeAmount);
+        _timedExecute(signal.direction, signal.asset, tradeAmount, signal.confidence);
       }
     }
 
@@ -5040,9 +5044,34 @@
       const ms = Math.round(durSec * 1000 * CFG.ETE_WAIT_FRAC);
       return Math.max(CFG.ETE_WAIT_MIN_MS, Math.min(CFG.ETE_WAIT_MAX_MS, ms));
     }
-    function _timedExecute(direction, asset, amount) {
+    function _timedExecute(direction, asset, amount, confidence) {
       if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount); return; }
       if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
+      const a = normalizeAsset(asset);
+      const cs = _chatSig[a];
+      const chatConfirm = cs && cs.dir === direction;
+      const chatContra  = cs && cs.dir !== direction;
+      const plat = platformStrength(a);
+
+      // ① حماية مبنية على البيانات (تسبق الدخول الفوري): عكس الشات + بلا دعم منصة +
+      //    زخم ضعيف = مصدر معظم الخسائر (حتى لو الثقة عالية — مثل #0263 BUY 95% خسر)
+      if (CFG.ETE_BLOCK_WEAK_COUNTER_CHAT && chatContra && plat < 3) {
+        const sl = OracleLab.microSlope(a, CFG.ETE_SLOPE_MS);
+        const strong = sl && ((direction === 'BUY'  && sl.rel >=  CFG.ETE_STRONG_REL) ||
+                              (direction === 'SELL' && sl.rel <= -CFG.ETE_STRONG_REL));
+        if (!strong) {
+          addLog('🚫 [ENTRY] إلغاء — عكس الشات (' + cs.dir + ') بلا دعم منصة وزخم ضعيف | ' + direction, 'info');
+          return;
+        }
+      }
+
+      // ② دخول فوري للقناعة العالية (الشات يؤكّد / قوة منصة قصوى / ثقة عالية)
+      //    يعالج «الدخول المتأخر» — الإشارات القوية لا تنتظر. (شات-تأكيد = 100% بالبيانات)
+      if (chatConfirm || plat >= 4 || (confidence || 0) >= CFG.ETE_INSTANT_CONF) {
+        addLog('🎯 [ENTRY] دخول فوري — قناعة عالية (' + (chatConfirm ? 'شات✓' : plat >= 4 ? 'منصة:4' : 'ثقة:' + confidence + '%') + ') ' + direction, 'signal');
+        _executeDualTrade(direction, asset, amount); return;
+      }
+
       const maxWait = _eteMaxWait();
       const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 5));
       const deadline = Date.now() + maxWait;
