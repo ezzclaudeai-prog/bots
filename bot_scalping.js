@@ -184,6 +184,10 @@
     PSE_USE_SLOPE           : true,        // [V16] استخدم ميل التيك لتحديد الاتجاه عند غياب الشات
     PSE_SLOPE_MS            : 500,         // نافذة حساب الميل (ميلي ثانية)
     PSE_SLOPE_MIN_REL       : 0.000020,   // أدنى عائد نسبي لاعتبار الميل اتجاهاً واضحاً
+    // ─── [V18] التقييم السريع داخل الشمعة — تسريع تكرار التداول ──────────────
+    FAST_EVAL_ENABLED       : true,        // ✅ قيّم الأنماط داخل الشمعة (لا تنتظر إغلاقها)
+    FAST_EVAL_MS            : 1500,        // أدنى فاصل بين تقييمين سريعين (مللي ثانية)
+    FAST_EVAL_MIN_TICKS     : 4,           // أدنى عدد تيكات في الشمعة المتشكّلة قبل تقييمها
     // ─── [V17] محرّك توقيت الدخول (ETE) — لا تدخل إلا حين يوافق الزخم اللحظي ──
     ENTRY_TIMING_ENABLED    : true,        // ✅ تأجيل الدخول حتى يوافق ميل التيك اتجاه الصفقة
     ETE_SLOPE_MS            : 1200,        // نافذة قياس الزخم اللحظي عند الدخول (ميلي ثانية)
@@ -493,7 +497,13 @@
   function loadStats() {
     try {
       const raw = localStorage.getItem('cb_v100_stats');
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const s = JSON.parse(raw);
+        // [V18] العدّادات المتتالية لا تُورَّث عبر تحديث الصفحة — جلسة جديدة = بداية نظيفة
+        // (كانت 3 خسائر قديمة تُسترجع وتُطلق RECALIBRATE فتوقف البوت 45ث عند الإقلاع)
+        s.lossStreak = 0; s.winStreak = 0;
+        return s;
+      }
     } catch(_) {}
     return { wins:0, losses:0, total:0, lossStreak:0, bestStreak:0, winStreak:0, tveWins:0, tveLosses:0, confWins:0, confLosses:0, doubles:0, doubleWins:0 };
   }
@@ -1577,6 +1587,7 @@
     tickBuffers[a].push(price);
     if (tickBuffers[a].length > 600) tickBuffers[a].shift();
     try { OracleLab.onTick(a, price, now); } catch(_) {}   // [V16] التقاط خام عالي الدقة
+    try { if (a === activeAsset && typeof DualWSSManager !== 'undefined') DualWSSManager.fastEval(a); } catch(_) {}  // [V18] تقييم سريع داخل الشمعة
     totalTicks++;
     if (!activeAsset) onActiveAsset(a, 'firstTick');
     const cc = currentCandles[a];
@@ -4454,12 +4465,35 @@
       return true;
     }
 
+    // ─── [V18] تقييم سريع داخل الشمعة — لا ينتظر إغلاقها (لتسريع التداول) ────
+    //   يبني الشمعة المتشكّلة من تيكات اللحظة ويُلحقها مؤقتاً بالشموع المغلقة، ثم
+    //   يستدعي onCandleClose نفسه → يعيد استخدام كل بوابات الأمان (أوراكل/اتجاه/
+    //   ثقة/استنفاد/ETE) دون تكرارها. القفل والتهدئة يمنعان التكرار في نفس الشمعة.
+    let _lastFastEval = 0;
+    function fastEval(asset) {
+      if (!CFG.FAST_EVAL_ENABLED || !_running) return;
+      const a = normalizeAsset(asset);
+      if (a !== activeAsset) return;
+      if (tradeExec || _signalQueue || _entryTimer) return;      // مشغول/ينتظر دخولاً
+      if (Date.now() < _cooldownUntil) return;
+      const now = Date.now();
+      if (now - _lastFastEval < CFG.FAST_EVAL_MS) return;
+      const cc = currentCandles[a];
+      if (!cc || !cc.prices || cc.prices.length < CFG.FAST_EVAL_MIN_TICKS) return;
+      const buf = candleBuffers[a];
+      if (!buf || buf.length < 3) return;
+      const forming = buildCandle(cc.prices, cc.startTime);
+      if (!forming) return;
+      _lastFastEval = now;
+      buf.push(forming);                       // ألحق الشمعة المتشكّلة مؤقتاً
+      try { onCandleClose(a); } catch(_) {} finally { buf.pop(); }   // قيّم ثم أزلها
+    }
+
     // ─── كشف إشارة عند إغلاق شمعة ─────────────────────────────────────
     function onCandleClose(asset) {
       if (!_running) return;
       const a = normalizeAsset(asset);
       if (a !== activeAsset) return;
-
       const candles = candleBuffers[a];
       if (!candles || candles.length < 3) return;
 
@@ -5204,6 +5238,7 @@
         };
       },
       onCandleClose,
+      fastEval,
       onPlatformSignal,
       getLatencyGap:     () => _latencyGap,
       getLastSignal:     () => _lastSignal,
