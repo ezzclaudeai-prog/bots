@@ -170,6 +170,10 @@
     ORACLE_CONFIRM_WINDOW_MS: 2500,        // نافذة تيكات الأوراكل المعتبرة (مللي ثانية)
     ORACLE_CONFIRM_MIN_TICKS: 3,           // أقل عدد تيكات أوراكل مطلوب — وإلا fail-open (يسمح)
     ORACLE_CONFIRM_K        : 1.0,         // الميل يُحسب معارِضاً فقط إذا تجاوز K×ضجيج التيك (يحجب التعارض الواضح فقط)
+    // ─── [V14 — إصلاح الأوراكل] إشارات المنصة الحقيقية (signals/update + شات) ──
+    ORACLE_SIG_TTL_MS       : 8000,        // ✅ صلاحية قوة المنصة الرقمية (تُحدّث كل ~5ث)
+    ORACLE_CHAT_TTL_MS      : 90000,       // ✅ صلاحية إشارة الشات الاتجاهية (M1+ تبقى صالحة ~90ث)
+    ORACLE_MIN_STRENGTH     : 3,           // ✅ الحد الأدنى لقوة إشارة المنصة (0-4) لاعتبارها تأكيداً
 
     // ─── Socket Stability ──────────────────────────────────────────────
     WS_SELF_PING_ENABLED    : false,       // ✅ إيقاف PING الخاص — المنصة تدير PING/PONG بنفسها
@@ -1174,6 +1178,10 @@
         if (start < 0) return;
         const obj = JSON.parse(text.slice(start));
         if (evName==='updateHistoryNewFast' && obj.asset && Array.isArray(obj.history)) { processHistoryFast(obj.asset, obj.period, obj.history); return; }
+        // ✅ [V14] أوراكل المنصة: قوة الإشارة الرقمية لكل زوج×فريم (المصدر الصحيح)
+        if ((evName==='signals/update' || evName==='signals/load') && obj && Array.isArray(obj.signals)) {
+          try { DualWSSManager.onSignalsUpdate(obj.signals); } catch(_){} return;
+        }
         if (evName==='successcloseOrder'   && obj.deals) { processCloseOrder(obj); return; }
         if (evName==='failopenOrder' && obj.error) { onFailOrder(obj); return; }
         if (evName==='successupdateBalance' && obj.balance !== undefined) { onBalanceUpdate(obj); return; }
@@ -1212,6 +1220,17 @@
       if (Array.isArray(data)) { for (const item of data) { const t = extractTickFromArray(Array.isArray(item)?item:[item]); if (t) onTick(t.asset,t.price,t.ts, wsRef && wsRef._dualRole); } }
     }
     if (evName==='chafor') { const cf = extractChafor(Array.isArray(data)?data:[data]); if (cf) onChafor(cf.asset, cf.seconds); }
+    // ✅ [V14] إشارة الشات الاتجاهية (UP2/DOWN2) — الأوراكل الاتجاهي الصريح
+    if (evName==='chat_room_list_update' && data && data.message && data.message.message_content && data.message.message_content.signal) {
+      try { DualWSSManager.onChatSignal(data.message.message_content.signal); } catch(_){}
+    }
+    if (evName==='chat_room_list' && data && Array.isArray(data.list)) {
+      try { for (const it of data.list) { const s = it && it.message_content && it.message_content.signal; if (s) DualWSSManager.onChatSignal(s); } } catch(_){}
+    }
+    // ✅ [V14] بعض signals/update قد تصل نصاً 42 أيضاً
+    if ((evName==='signals/update' || evName==='signals/load') && data && Array.isArray(data.signals)) {
+      try { DualWSSManager.onSignalsUpdate(data.signals); } catch(_){}
+    }
     if (evName==='changeSymbol' && data?.asset) onActiveAsset(data.asset, 'changeSymbol');
     if (evName==='saveCharts') { const s = (data&&data.settings)||data||{}; _extractFastCloseAt(s, data||{}); }
 
@@ -3997,26 +4016,79 @@
       if (buf.length > 60) buf.shift();
     }
 
-    // ✅ [V13.5/المسار C] هل يوافق ميل الأوراكل اللحظي اتجاه الإشارة؟
-    //   fail-open: إذا لا توجد بيانات أوراكل كافية → يسمح (لا يكسر السكالبينغ).
-    //   يحجب فقط التعارض الواضح (ميل يتجاوز K×ضجيج التيك عكس اتجاه الإشارة).
+    // ══════════════════════════════════════════════════════════════════════
+    // ✅ [V14 — إصلاح الأوراكل] الأوراكل الحقيقي = إشارات المنصة (لا events-po)
+    //   اكتشاف SPY: events-po خادم إشعارات بلا أسعار. المصدر الصحيح:
+    //   • signals/update (رقمي، قوة 0-4 لكل زوج×فريم) — على المقبس الرئيسي
+    //   • إشارة غرفة الشات (UP2/DOWN2 = اتجاه صريح) — على chat-po
+    // ══════════════════════════════════════════════════════════════════════
+    const _platSig = {};   // asset -> { tf:{[sec]:code}, ts }  (قوة من signals/update)
+    const _chatSig = {};   // asset -> { dir:'BUY'|'SELL', tf, price, ts }  (اتجاه من الشات)
+
+    // signals/update | signals/load: [[asset,[[tf,code],...],price], ...]
+    function onSignalsUpdate(signals) {
+      if (!Array.isArray(signals)) return;
+      const now = Date.now();
+      for (const row of signals) {
+        if (!Array.isArray(row) || typeof row[0] !== 'string') continue;
+        const a = normalizeAsset(row[0]);
+        const pairs = Array.isArray(row[1]) ? row[1] : [];
+        const rec = _platSig[a] || (_platSig[a] = { tf: {}, ts: now });
+        rec.ts = now;
+        for (const p of pairs) { if (Array.isArray(p) && p.length >= 2) rec.tf[p[0]] = p[1]; }
+      }
+    }
+    // إشارة الشات: forecast UP2/DOWN2, timeframe "M1".. → اتجاه صريح
+    function onChatSignal(sig) {
+      try {
+        if (!sig || !sig.symbol || !sig.forecast) return;
+        const a = normalizeAsset(sig.symbol);
+        const dir = /UP/i.test(sig.forecast) ? 'BUY' : (/DOWN/i.test(sig.forecast) ? 'SELL' : null);
+        if (!dir) return;
+        _chatSig[a] = { dir, tf: sig.timeframe || '?', price: sig.price || 0, ts: Date.now() };
+      } catch(_) {}
+    }
+    // أقصى قوة منصة على فريمات السكالب (≤ مدة الصفقة)
+    function platformStrength(asset) {
+      const rec = _platSig[normalizeAsset(asset)];
+      if (!rec || (Date.now() - rec.ts) > CFG.ORACLE_SIG_TTL_MS) return 0;
+      const dur = _tradeDuration || candlePeriod || 5;
+      let best = 0;
+      for (const k in rec.tf) { if (Number(k) <= Math.max(dur, 5) + 0.5) best = Math.max(best, rec.tf[k] || 0); }
+      return best; // 0-4
+    }
+
+    // ✅ [V14] الأوراكل الجديد — يجمع: اتجاه الشات (veto) + قوة المنصة (تأكيد)
     function oracleAgrees(direction, asset) {
       if (!CFG.ORACLE_CONFIRM_ENABLED) return { agree: true, reason: 'disabled' };
       const a = normalizeAsset(asset);
-      const all = _oracleTicks[a] || [];
       const now = Date.now();
+
+      // (1) إشارة الشات الاتجاهية الصريحة — أقوى مصدر
+      const cs = _chatSig[a];
+      if (cs && (now - cs.ts) <= CFG.ORACLE_CHAT_TTL_MS) {
+        if (cs.dir !== direction) return { agree: false, reason: 'chat-contradict', oracleDir: cs.dir };
+        return { agree: true, reason: 'chat-confirm', oracleDir: cs.dir };
+      }
+
+      // (2) قوة المنصة الرقمية على فريم السكالب (اتجاه مجهول → لا تحجب، لكن سجّل القوة)
+      const st = platformStrength(a);
+      if (st >= CFG.ORACLE_MIN_STRENGTH) return { agree: true, reason: 'plat-strength', strength: st };
+
+      // (3) احتياط: ميل الأوراكل القديم إن توفّر (نادراً)
+      const all = _oracleTicks[a] || [];
       const win = all.filter(x => x.t >= now - CFG.ORACLE_CONFIRM_WINDOW_MS);
-      if (win.length < CFG.ORACLE_CONFIRM_MIN_TICKS) return { agree: true, reason: 'no-oracle' };
-      const slope = win[win.length - 1].p - win[0].p;
-      // ضجيج التيك = متوسط القيمة المطلقة لفروق التيكات المتتابعة
-      let noise = 0, k = 0;
-      for (let i = 1; i < win.length; i++) { noise += Math.abs(win[i].p - win[i-1].p); k++; }
-      noise = (k ? noise / k : 0) || 1e-9;
-      const threshold = CFG.ORACLE_CONFIRM_K * noise;
-      if (Math.abs(slope) < threshold) return { agree: true, reason: 'flat' }; // أوراكل محايد → اسمح
-      const oracleDir = slope > 0 ? 'BUY' : 'SELL';
-      const agree = oracleDir === direction;
-      return { agree, reason: agree ? 'confirm' : 'contradict', oracleDir, slope };
+      if (win.length >= CFG.ORACLE_CONFIRM_MIN_TICKS) {
+        const slope = win[win.length - 1].p - win[0].p;
+        let noise = 0, k = 0;
+        for (let i = 1; i < win.length; i++) { noise += Math.abs(win[i].p - win[i-1].p); k++; }
+        noise = (k ? noise / k : 0) || 1e-9;
+        if (Math.abs(slope) >= CFG.ORACLE_CONFIRM_K * noise) {
+          const oracleDir = slope > 0 ? 'BUY' : 'SELL';
+          return { agree: oracleDir === direction, reason: oracleDir === direction ? 'confirm' : 'contradict', oracleDir };
+        }
+      }
+      return { agree: true, reason: 'no-oracle' }; // fail-open
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -4866,6 +4938,9 @@
       recordMsgTs,
       recordOracleTick,
       oracleAgrees,
+      onSignalsUpdate,
+      onChatSignal,
+      platformStrength,
       onCandleClose,
       onPlatformSignal,
       getLatencyGap:     () => _latencyGap,
