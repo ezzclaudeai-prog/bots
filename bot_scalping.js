@@ -201,14 +201,11 @@
   const PO_VALID_TIMES  = [1,2,3,5,10,15,20,25,30,45,60,90,120,180,300,600,900,1800,3600];
   const TRUSTED_SOURCES = new Set(['saveCharts','platform','updateCharts','history']);
 
-  // ✅ [V14.3] مدد التداول المسموحة فعلياً من أزرار المنصة: S3,S15,S30,M1,M3,M5,M30,H1,H4
-  //   (لا يوجد 1/2/5/10ث — إرسالها يسبب IncorrectExpTime)
-  const PO_TRADE_DURATIONS = [3,15,30,60,180,300,1800,3600,14400];
+  // ✅ [V14.4] المسموح فعلياً: أي ثانية صحيحة ≥ 3 (3،4،5،6،7...). الممنوع فقط 1 و 2.
+  //   لا تثبيت على شبكة — نحترم مدة المستخدم بالضبط، فقط حد أدنى 3ث.
   function _snapTradeDuration(secs) {
-    const s = (!secs || secs <= 0) ? 3 : secs;
-    let best = PO_TRADE_DURATIONS[0];
-    for (const t of PO_TRADE_DURATIONS) { if (Math.abs(t - s) < Math.abs(best - s)) best = t; }
-    return Math.max(CFG.MIN_TRADE_SEC || 3, best); // الأقرب من المسموح، وبحد أدنى 3ث
+    const s = Math.round(Number(secs) || 0);
+    return Math.max(CFG.MIN_TRADE_SEC || 3, s); // مدة المستخدم كما هي، بحد أدنى 3ث
   }
 
   function snapToPOTime(secs) {
