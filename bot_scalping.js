@@ -160,6 +160,7 @@
     TREND_FILTER_MODE       : 'soft',      // ✅ [V13.6] 'soft'=خصم ثقة للمعاكس (يبقى سريعاً) | 'hard'=حظر تام
     TREND_SOFT_PENALTY      : 12,          // ✅ [V13.6] خصم الثقة للإشارة المعاكسة في الوضع الناعم
     EXHAUSTION_COOLDOWN_MS  : 4000,        // ✅ [V13.6] بعد الاستنفاد امنع اتجاه الاستمرار 4ث (كان 9 — أسرع)
+    MIN_TRADE_SEC           : 3,           // ✅ [V14.2] حد أدنى لمدة الصفقة — المنصة ترفض <3ث (IncorrectExpTime)
     ADAPTIVE_CONF_ENABLED   : true,        // ✅ ثقة تكيفية — رفع العتبة للأنماط الخاسرة حياً
     ADAPTIVE_MIN_SAMPLES    : 6,           // الحد الأدنى من الصفقات قبل تفعيل التكيّف لكل نمط
     ADAPTIVE_CONF_PER_LOSS  : 6,           // رفع عتبة الثقة المطلوبة % لكل خسارة صافية للنمط
@@ -268,6 +269,7 @@
   // ✅ [V13.4] حالة الاستنفاد الاتجاهي + سجل أداء الأنماط الحي
   let _exhaustDir   = null;    // 'UP' أو 'DOWN' — اتجاه آخر استنفاد مكتشف
   let _exhaustUntil = 0;       // وقف اتجاه الاستمرار حتى هذا الوقت
+  let _lastExhaustLogTs = 0;   // ✅ [V14.2] تقييد تكرار سجل الاستنفاد
   const _patternWL = {};       // { pattern: { w:عدد فوز, l:عدد خسارة } } — سجل حي لكل نمط
   let _lastWsErrorMsgTs = 0;                // تقييد رسائل خطأ المقابس
   const _executorPool = new Map();           // تجمع مقابس المنفذ: ws → { origSend, connectedAt, lastActivity, authed }
@@ -447,7 +449,7 @@
     const action = direction === 'BUY' ? 'call' : 'put';
     const amt = overrideAmount || tradeAmount;
     const safeAmt = _safeAmount(amt);
-    const tradeSec = _tradeDuration || snapToPOTime(candlePeriod || 5);
+    const tradeSec = Math.max(CFG.MIN_TRADE_SEC, _tradeDuration || snapToPOTime(candlePeriod || 5));
     const rid = _nextReqId();
     if (!_payloadCache.prefixCall) _rebuildPayloadCache();
     const prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
@@ -4216,7 +4218,7 @@
       _ghostConsecutive++;  // ✅ زيادة عداد الصفقات الوهمية المتتالية
       _ghostWatching = true;
       const entryPrice = _lastSignal ? _lastSignal.price : 0;
-      const tradeSec = _tradeDuration || snapToPOTime(candlePeriod || 5);
+      const tradeSec = Math.max(CFG.MIN_TRADE_SEC, _tradeDuration || snapToPOTime(candlePeriod || 5));
       addLog('👻 [GHOST-EXEC] محاكاة ' + direction + ' | ' + asset + ' @ ' + (entryPrice ? entryPrice.toFixed(5) : '?') + ' | $' + amount + ' | بدون رهان حقيقي', 'signal');
       // مقارنة سعر حقيقي بعد انتهاء مدة الصفقة — مثل النسخة الاحتياطية
       const expireMs = Math.max(tradeSec * 1000, 5000);
@@ -4306,15 +4308,19 @@
       _lastTrendDirection = _detectTrend(candles);
       _updateTrendHUD();
 
-      // ═══ فحص استنفاد الاتجاه — منع الدخول بعد رالي طويل ═══
+      // ═══ فحص استنفاد الاتجاه ═══
+      // ✅ [V14.2] لم يعد يحجب كل شيء (كان يبطئ ~دقيقتين). يسجّل اتجاه الاستنفاد فقط،
+      //   ثم بوابة EXHAUST-COOL أدناه تمنع اتجاه الاستمرار فقط وتسمح بالانعكاس → أسرع.
       if (_isTrendExhausted(candles)) {
-        // ✅ [V13.4] سجّل اتجاه الاستنفاد وفعّل تهدئة على اتجاه الاستمرار
         const _wExh = candles.slice(-Math.min(candles.length, 12));
         const _exhUp = _wExh[_wExh.length - 1].close >= _wExh[0].close;
         _exhaustDir   = _exhUp ? 'UP' : 'DOWN';
         _exhaustUntil = Date.now() + CFG.EXHAUSTION_COOLDOWN_MS;
-        addLog('🛑 [EXHAUSTION] اتجاه مستنفد — السعر تحرك ' + _priceRunPips.toFixed(1) + ' نقطة في اتجاه واحد. انتظار انعكاس أو تصحيح', 'info');
-        return;
+        if (Date.now() - _lastExhaustLogTs > CFG.EXHAUSTION_COOLDOWN_MS) {
+          _lastExhaustLogTs = Date.now();
+          addLog('🛑 [EXHAUSTION] استنفاد ' + _exhaustDir + ' — تحرّك ' + _priceRunPips.toFixed(1) + ' نقطة. منع الاستمرار فقط (الانعكاس مسموح)', 'info');
+        }
+        // لا return — نكمل لتقييم النمط؛ بوابة الاستنفاد الاتجاهي تتكفّل بالباقي
       }
 
       // ═══ فحص تكرار النمط — منع نفس النمط من التكرار بسرعة ═══
@@ -4806,7 +4812,7 @@
       const action = direction === 'BUY' ? 'call' : 'put';
       const amt = overrideAmount || tradeAmount;
       const safeAmt = _safeAmount(amt);
-      const tradeSec = _tradeDuration || snapToPOTime(candlePeriod || 5);
+      const tradeSec = Math.max(CFG.MIN_TRADE_SEC, _tradeDuration || snapToPOTime(candlePeriod || 5));
       const rid = _nextReqId();
 
       if (!_payloadCache.prefixCall) _rebuildPayloadCache();
