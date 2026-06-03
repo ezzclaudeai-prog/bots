@@ -4362,11 +4362,15 @@
           return;
         }
 
-        // ✅ [V13.5/المسار C] فلتر تأكيد الأوراكل — احجب إذا عارض الفيد الأسرع الإشارة بوضوح
+        // ✅ [V14] فلتر تأكيد الأوراكل — إشارات المنصة الحقيقية (شات اتجاه + قوة رقمية)
         const _orc = oracleAgrees(signal.direction, signal.asset);
         if (!_orc.agree) {
-          addLog('🔮 [ORACLE-VETO] ' + signal.direction + ' مرفوض — الأوراكل يتحرك ' + _orc.oracleDir + ' (تعارض كموني)', 'info');
+          addLog('🔮 [ORACLE-VETO] ' + signal.direction + ' مرفوض — إشارة المنصة ' + _orc.oracleDir + ' (' + _orc.reason + ')', 'info');
           return;
+        }
+        // ✅ [V14] تشخيص تغطية الأوراكل — لقياس كم مرة توجد إشارة منصة فعلية (لقرار المسار D)
+        if (_orc.reason === 'chat-confirm' || _orc.reason === 'plat-strength') {
+          addLog('🔮 [ORACLE-OK] ' + signal.direction + ' مؤكَّد — ' + _orc.reason + (_orc.strength ? ' قوة:' + _orc.strength : '') + ' | قوة المنصة الآن: ' + (DualWSSManager.platformStrength ? DualWSSManager.platformStrength(signal.asset) : '?'), 'info');
         }
 
         // ═══ فحص الصفقات المتتالية في نفس الاتجاه ═══
