@@ -162,6 +162,7 @@
     TREND_SOFT_PENALTY      : 12,          // ✅ [V13.6] خصم الثقة للإشارة المعاكسة في الوضع الناعم
     COUNTERTREND_NEEDS_ORACLE: false,      // ✅ [V14.6] اختياري ومُطفأ: بيانات السجل أثبتت أن المعاكس 75% رابح — لا تحجبه
     COUNTERTREND_MIN_CONF    : 90,         // عتبة الثقة لو فعّلته يدوياً
+    NO_ORACLE_MIN_CONF       : 74,         // [V21] بلا دعم أوراكل (chat=— و plat<3) → اشترط ثقة نمط ≥ هذه (0=معطّل)
     EXHAUSTION_COOLDOWN_MS  : 4000,        // ✅ [V13.6] بعد الاستنفاد امنع اتجاه الاستمرار 4ث (كان 9 — أسرع)
     MIN_TRADE_SEC           : 3,           // ✅ [V14.2] حد أدنى لمدة الصفقة — المنصة ترفض <3ث (IncorrectExpTime)
     ADAPTIVE_CONF_ENABLED   : true,        // ✅ ثقة تكيفية — رفع العتبة للأنماط الخاسرة حياً
@@ -4578,6 +4579,13 @@
         const _oracleConfirmed = (_orc.reason === 'chat-confirm' || _orc.reason === 'plat-strength');
         if (_oracleConfirmed) {
           addLog('🔮 [ORACLE-OK] ' + signal.direction + ' مؤكَّد — ' + _orc.reason + (_orc.strength ? ' قوة:' + _orc.strength : '') + ' | قوة المنصة الآن: ' + (DualWSSManager.platformStrength ? DualWSSManager.platformStrength(signal.asset) : '?'), 'info');
+        }
+
+        // ✅ [V21] قاعدة مدعومة ببيانات 3 جلسات: الصفقات بلا أي دعم أوراكل (لا شات يؤكّد
+        //   ولا قوة منصة ≥3) هي ملف الخسارة في السوق المتذبذب. نشترط ثقة نمط أعلى لها.
+        if (CFG.NO_ORACLE_MIN_CONF > 0 && !_oracleConfirmed && signal.confidence < CFG.NO_ORACLE_MIN_CONF) {
+          addLog('🛡️ [NO-ORACLE] ' + signal.direction + ' مرفوض — بلا دعم أوراكل وثقة ' + signal.confidence + '% < ' + CFG.NO_ORACLE_MIN_CONF + '% | نمط: ' + signal.pattern, 'info');
+          return;
         }
 
         // ✅ [V14.6] قاعدة مدعومة بالبيانات: المعاكس للاتجاه + بلا تأكيد منصة = ملف الخسارة.
