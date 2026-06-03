@@ -142,7 +142,8 @@
     MAX_CONSEC_SAME_DIR     : 2,          // حد الصفقات المتتالية في نفس الاتجاه (2 = أقصى صفقتين BUY أو SELL متتاليتين)
     CONSEC_CONF_PENALTY     : 20,         // خصم من الثقة لكل صفقة متتالية في نفس الاتجاه (20% → 80% تصبح 60%)
     PATTERN_REARM_ENABLED   : true,       // حاجز إعادة تسليح النمط — نفس النمط لا يكرر خلال فترة الحماية
-    PATTERN_REARM_MIN_MS    : 10000,      // الحد الأدنى لنافذة إعادة التسليح (10 ثانية) — تقليل الانتظار على الفريمات القصيرة
+    PATTERN_REARM_MIN_MS    : 4000,       // [V20] خُفّض 10000→4000 لتسريع تكرار الأنماط الرابحة
+    PATTERN_REARM_FRAME_MULT: 1,          // [V20] مضاعف مدة الشمعة (كان 2× → 1× = أسرع)
     MAX_TRADES_PER_WINDOW   : 12,         // ✅ [V14.5] سقف الصفقات/دقيقة (12 بدل 4 — تسريع السكالبينغ)
     TRADE_WINDOW_MS         : 60000,      // نافذة العد: 60 ثانية
 
@@ -186,7 +187,7 @@
     PSE_SLOPE_MIN_REL       : 0.000020,   // أدنى عائد نسبي لاعتبار الميل اتجاهاً واضحاً
     // ─── [V18] التقييم السريع داخل الشمعة — تسريع تكرار التداول ──────────────
     FAST_EVAL_ENABLED       : true,        // ✅ قيّم الأنماط داخل الشمعة (لا تنتظر إغلاقها)
-    FAST_EVAL_MS            : 1500,        // أدنى فاصل بين تقييمين سريعين (مللي ثانية)
+    FAST_EVAL_MS            : 1000,        // [V20] أدنى فاصل بين تقييمين سريعين (خُفّض 1500→1000)
     FAST_EVAL_MIN_TICKS     : 4,           // أدنى عدد تيكات في الشمعة المتشكّلة قبل تقييمها
     // ─── [V17] محرّك توقيت الدخول (ETE) — لا تدخل إلا حين يوافق الزخم اللحظي ──
     ENTRY_TIMING_ENABLED    : true,        // ✅ تأجيل الدخول حتى يوافق ميل التيك اتجاه الصفقة
@@ -4704,8 +4705,8 @@
       if (!CFG.PATTERN_REARM_ENABLED) return false;
       const key = signal.pattern + ':' + signal.asset;
       const now = Date.now();
-      // نافذة إعادة التسليح: الأكبر من (2× مدة الشمعة) أو (الحد الأدنى 15 ثانية)
-      const frameBased = (candlePeriod > 0 ? candlePeriod : 15) * 1000 * 2;
+      // نافذة إعادة التسليح: الأكبر من (مضاعف × مدة الشمعة) أو الحد الأدنى
+      const frameBased = (candlePeriod > 0 ? candlePeriod : 6) * 1000 * (CFG.PATTERN_REARM_FRAME_MULT || 1);
       const rearmWindow = Math.max(CFG.PATTERN_REARM_MIN_MS, frameBased);
       if (_lastExecutedPattern === key && (now - _lastExecutedPatternTs) < rearmWindow) {
         return true; // لا يزال في فترة الحماية
