@@ -184,6 +184,13 @@
     PSE_USE_SLOPE           : true,        // [V16] استخدم ميل التيك لتحديد الاتجاه عند غياب الشات
     PSE_SLOPE_MS            : 500,         // نافذة حساب الميل (ميلي ثانية)
     PSE_SLOPE_MIN_REL       : 0.000020,   // أدنى عائد نسبي لاعتبار الميل اتجاهاً واضحاً
+    // ─── [V17] محرّك توقيت الدخول (ETE) — لا تدخل إلا حين يوافق الزخم اللحظي ──
+    ENTRY_TIMING_ENABLED    : true,        // ✅ تأجيل الدخول حتى يوافق ميل التيك اتجاه الصفقة
+    ETE_SLOPE_MS            : 1200,        // نافذة قياس الزخم اللحظي عند الدخول (ميلي ثانية)
+    ETE_MIN_REL             : 0.000020,   // أدنى عائد نسبي ليُعدّ الميل اتجاهاً (وإلا «مسطّح»)
+    ETE_MAX_WAIT_MS         : 1500,        // أقصى انتظار لموافقة الزخم (جزء من عمر الصفقة)
+    ETE_POLL_MS             : 120,         // فحص الموافقة كل N ميلي ثانية
+    ETE_ON_TIMEOUT          : 'skip',      // عند انتهاء المهلة دون توافق: 'skip' إلغاء | 'enter' دخول
     // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
     ORACLE_LAB_ENABLED      : true,        // ✅ تسجيل خام: يربط كل صفقة بمصدرها ونتيجتها (آمن)
     ORACLE_LAB_REPORT_EVERY : 10,          // اطبع جدول الأداء كل N صفقة
@@ -4060,6 +4067,7 @@
     let _running        = false;  // هل النظام يعمل؟
     let _signalQueue    = null;   // طابور الإشارات (إشارة واحدة فقط في كل مرة)
     let _queueTimer     = null;   // مؤقت معالجة الطابور
+    let _entryTimer     = null;   // [V17] مؤقت محرّك توقيت الدخول (ETE)
     let _signalCount    = 0;      // عدد الإشارات المكتشفة
     let _tradeCount     = 0;      // عدد الصفقات المنفذة عبر النظام
     let _ghostCount     = 0;      // عدد الصفقات الوهمية
@@ -4963,14 +4971,60 @@
         if (_queueTimer) clearTimeout(_queueTimer);
         _queueTimer = setTimeout(() => {
           _queueTimer = null;
-          _executeDualTrade(signal.direction, signal.asset, tradeAmount);
+          _timedExecute(signal.direction, signal.asset, tradeAmount);
         }, totalDelay);
       } else {
-        _executeDualTrade(signal.direction, signal.asset, tradeAmount);
+        _timedExecute(signal.direction, signal.asset, tradeAmount);
       }
     }
 
     // ─── تنفيذ الصفقة عبر مقبس المنفذ المعترض ─────────────────────────
+    // ═══ [V17] محرّك توقيت الدخول (ETE) ════════════════════════════════════
+    //   المشكلة: البوت يعرف الاتجاه لكن يدخل في اللحظة الخطأ (قبل أن يتحرك السعر)
+    //   الحل: لا تدخل إلا حين يوافق الزخم اللحظي (الميل) اتجاه الصفقة — وإلا انتظر
+    //   حتى يوافق ضمن مهلة قصيرة (جزء من عمر الصفقة)، أو ألغِ لتجنّب توقيت سيّئ.
+    function _entryAligned(asset, direction) {
+      const sl = OracleLab.microSlope(normalizeAsset(asset), CFG.ETE_SLOPE_MS);
+      if (!sl) return { ok: true, reason: 'no-data' };   // لا بيانات → لا تعطّل
+      const min = CFG.ETE_MIN_REL;
+      if (direction === 'BUY') {
+        if (sl.rel >=  min) return { ok: true,  reason: 'صاعد✓', sl };
+        if (sl.rel <= -min) return { ok: false, reason: 'هابط✗', sl };
+      } else {
+        if (sl.rel <= -min) return { ok: true,  reason: 'هابط✓', sl };
+        if (sl.rel >=  min) return { ok: false, reason: 'صاعد✗', sl };
+      }
+      return { ok: true, reason: 'مسطّح', sl };           // محايد → اسمح
+    }
+    function _timedExecute(direction, asset, amount) {
+      if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount); return; }
+      if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
+      const deadline = Date.now() + CFG.ETE_MAX_WAIT_MS;
+      const first = _entryAligned(asset, direction);
+      if (first.ok) {
+        if (first.sl) addLog('🎯 [ENTRY] دخول فوري — الزخم ' + first.reason + ' يوافق ' + direction, 'signal');
+        _executeDualTrade(direction, asset, amount); return;
+      }
+      addLog('⏳ [ENTRY] انتظار توقيت — الزخم ' + first.reason + ' يعاكس ' + direction + ' | مهلة ' + CFG.ETE_MAX_WAIT_MS + 'ms', 'info');
+      _entryTimer = setInterval(() => {
+        if (!_running || tradeExec) { clearInterval(_entryTimer); _entryTimer = null; return; }
+        const c = _entryAligned(asset, direction);
+        if (c.ok && c.reason !== 'مسطّح') {
+          clearInterval(_entryTimer); _entryTimer = null;
+          addLog('🎯 [ENTRY] الزخم توافق (' + c.reason + ') — دخول ' + direction, 'signal');
+          _executeDualTrade(direction, asset, amount);
+        } else if (Date.now() >= deadline) {
+          clearInterval(_entryTimer); _entryTimer = null;
+          if (CFG.ETE_ON_TIMEOUT === 'enter') {
+            addLog('🎯 [ENTRY] انتهت المهلة — دخول رغم عدم التوافق ' + direction, 'info');
+            _executeDualTrade(direction, asset, amount);
+          } else {
+            addLog('🚫 [ENTRY] انتهت المهلة دون توافق — إلغاء ' + direction + ' (تجنّب توقيت سيّئ)', 'info');
+          }
+        }
+      }, CFG.ETE_POLL_MS);
+    }
+
     function _executeDualTrade(direction, asset, overrideAmount) {
       if (!autoTrade) return;
       if (tradeExec) return;
@@ -5011,6 +5065,7 @@
         PERF.mark('orderSent');
         _tradeCount++;
         _pendingTradeRecord = { asset: asset || activeAsset, direction, amount: safeAmt, openTs: Date.now(), source: 'dualWSS' };
+        try { const _la = normalizeAsset(asset || activeAsset); const _tb = tickBuffers[_la]; _pendingTradeRecord.lab = OracleLab.snapshot(_la, direction); _pendingTradeRecord.openPrice = (_tb && _tb.length) ? _tb[_tb.length-1] : 0; } catch(_) {}  // [V16] لقطة مختبر الأوراكل (مسار DUAL)
         // ✅ تحديث سعر آخر صفقة
         _lastTradePrice = _lastSignal ? _lastSignal.price : 0;
         // ✅ مسح الإشارة المعلقة بعد التنفيذ الناجح
@@ -5103,6 +5158,7 @@
     function shutdown() {
       _running = false;
       if (_queueTimer) { clearTimeout(_queueTimer); _queueTimer = null; }
+      if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
       _signalQueue = null;
       addLog('🔮 [DUAL-WSS] تم إيقاف النظام', 'info');
     }
