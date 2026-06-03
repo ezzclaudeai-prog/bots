@@ -188,7 +188,10 @@
     ENTRY_TIMING_ENABLED    : true,        // ✅ تأجيل الدخول حتى يوافق ميل التيك اتجاه الصفقة
     ETE_SLOPE_MS            : 1200,        // نافذة قياس الزخم اللحظي عند الدخول (ميلي ثانية)
     ETE_MIN_REL             : 0.000020,   // أدنى عائد نسبي ليُعدّ الميل اتجاهاً (وإلا «مسطّح»)
-    ETE_MAX_WAIT_MS         : 1500,        // أقصى انتظار لموافقة الزخم (جزء من عمر الصفقة)
+    ETE_MAX_WAIT_MS         : 0,           // 0 = تلقائي حسب عمر الصفقة | >0 = override ثابت بالملي
+    ETE_WAIT_FRAC           : 0.30,        // نسبة عمر الصفقة المسموح انتظارها للدخول (30% من time)
+    ETE_WAIT_MIN_MS         : 600,         // حدّ أدنى للانتظار (لفريمات 3-4ث)
+    ETE_WAIT_MAX_MS         : 5000,        // حدّ أقصى للانتظار (لفريمات 15ث+)
     ETE_POLL_MS             : 120,         // فحص الموافقة كل N ميلي ثانية
     ETE_ON_TIMEOUT          : 'skip',      // عند انتهاء المهلة دون توافق: 'skip' إلغاء | 'enter' دخول
     // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
@@ -4996,16 +4999,25 @@
       }
       return { ok: true, reason: 'مسطّح', sl };           // محايد → اسمح
     }
+    // مهلة الانتظار = نسبة من عمر الصفقة المحدّد في time (مع حدّ أدنى/أقصى)
+    function _eteMaxWait() {
+      if (CFG.ETE_MAX_WAIT_MS > 0) return CFG.ETE_MAX_WAIT_MS;   // override يدوي إن ضُبط
+      const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 5));
+      const ms = Math.round(durSec * 1000 * CFG.ETE_WAIT_FRAC);
+      return Math.max(CFG.ETE_WAIT_MIN_MS, Math.min(CFG.ETE_WAIT_MAX_MS, ms));
+    }
     function _timedExecute(direction, asset, amount) {
       if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount); return; }
       if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
-      const deadline = Date.now() + CFG.ETE_MAX_WAIT_MS;
+      const maxWait = _eteMaxWait();
+      const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 5));
+      const deadline = Date.now() + maxWait;
       const first = _entryAligned(asset, direction);
       if (first.ok) {
         if (first.sl) addLog('🎯 [ENTRY] دخول فوري — الزخم ' + first.reason + ' يوافق ' + direction, 'signal');
         _executeDualTrade(direction, asset, amount); return;
       }
-      addLog('⏳ [ENTRY] انتظار توقيت — الزخم ' + first.reason + ' يعاكس ' + direction + ' | مهلة ' + CFG.ETE_MAX_WAIT_MS + 'ms', 'info');
+      addLog('⏳ [ENTRY] انتظار توقيت — الزخم ' + first.reason + ' يعاكس ' + direction + ' | مهلة ' + maxWait + 'ms (' + Math.round(CFG.ETE_WAIT_FRAC*100) + '% من ' + durSec + 'ث)', 'info');
       _entryTimer = setInterval(() => {
         if (!_running || tradeExec) { clearInterval(_entryTimer); _entryTimer = null; return; }
         const c = _entryAligned(asset, direction);
