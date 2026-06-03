@@ -159,6 +159,8 @@
     TREND_ATR_Z_THRESHOLD   : 0.9,         // ✅ [V13.6] قوة الاتجاه بوحدات ATR (0.9 — يحجب الترند الواضح فقط)
     TREND_FILTER_MODE       : 'soft',      // ✅ [V13.6] 'soft'=خصم ثقة للمعاكس (يبقى سريعاً) | 'hard'=حظر تام
     TREND_SOFT_PENALTY      : 12,          // ✅ [V13.6] خصم الثقة للإشارة المعاكسة في الوضع الناعم
+    COUNTERTREND_NEEDS_ORACLE: false,      // ✅ [V14.6] اختياري ومُطفأ: بيانات السجل أثبتت أن المعاكس 75% رابح — لا تحجبه
+    COUNTERTREND_MIN_CONF    : 90,         // عتبة الثقة لو فعّلته يدوياً
     EXHAUSTION_COOLDOWN_MS  : 4000,        // ✅ [V13.6] بعد الاستنفاد امنع اتجاه الاستمرار 4ث (كان 9 — أسرع)
     MIN_TRADE_SEC           : 3,           // ✅ [V14.2] حد أدنى لمدة الصفقة — المنصة ترفض <3ث (IncorrectExpTime)
     ADAPTIVE_CONF_ENABLED   : true,        // ✅ ثقة تكيفية — رفع العتبة للأنماط الخاسرة حياً
@@ -4365,11 +4367,13 @@
 
         // ✅ [V13.6] فلتر الاتجاه — وضعان: 'hard'=حظر تام | 'soft'=خصم ثقة (يبقى السكالبينغ سريعاً)
         let _effConf = signal.confidence;
+        let _counterTrend = false;
         if (!_trendAllows(signal.direction)) {
           if (CFG.TREND_FILTER_MODE === 'hard') {
             addLog('🚫 [TREND-BLOCK] ' + signal.direction + ' ممنوع — الاتجاه: ' + _lastTrendDirection, 'info');
             return;
           }
+          _counterTrend = true;
           // soft: اخصم من الثقة فقط — الإشارة المعاكسة القوية تمر، الضعيفة تُرفض بالعتبة
           _effConf -= CFG.TREND_SOFT_PENALTY;
           addLog('⚠️ [TREND-SOFT] ' + signal.direction + ' عكس الاتجاه ' + _lastTrendDirection + ' — خصم ' + CFG.TREND_SOFT_PENALTY + '% (ثقة: ' + _effConf + '%)', 'info');
@@ -4388,8 +4392,17 @@
           return;
         }
         // ✅ [V14] تشخيص تغطية الأوراكل — لقياس كم مرة توجد إشارة منصة فعلية (لقرار المسار D)
-        if (_orc.reason === 'chat-confirm' || _orc.reason === 'plat-strength') {
+        const _oracleConfirmed = (_orc.reason === 'chat-confirm' || _orc.reason === 'plat-strength');
+        if (_oracleConfirmed) {
           addLog('🔮 [ORACLE-OK] ' + signal.direction + ' مؤكَّد — ' + _orc.reason + (_orc.strength ? ' قوة:' + _orc.strength : '') + ' | قوة المنصة الآن: ' + (DualWSSManager.platformStrength ? DualWSSManager.platformStrength(signal.asset) : '?'), 'info');
+        }
+
+        // ✅ [V14.6] قاعدة مدعومة بالبيانات: المعاكس للاتجاه + بلا تأكيد منصة = ملف الخسارة.
+        //   (كل خسائر سجلك كانت كذلك؛ وكل صفقة أكّدها الأوراكل ربحت). نشترط ثقة عالية هنا.
+        if (CFG.COUNTERTREND_NEEDS_ORACLE && _counterTrend && !_oracleConfirmed &&
+            signal.confidence < CFG.COUNTERTREND_MIN_CONF) {
+          addLog('🛡️ [CT-GUARD] ' + signal.direction + ' مرفوض — معاكس للاتجاه بلا تأكيد منصة وثقة ' + signal.confidence + '% < ' + CFG.COUNTERTREND_MIN_CONF + '%', 'info');
+          return;
         }
 
         // ═══ فحص الصفقات المتتالية في نفس الاتجاه ═══
