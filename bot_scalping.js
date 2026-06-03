@@ -201,6 +201,16 @@
   const PO_VALID_TIMES  = [1,2,3,5,10,15,20,25,30,45,60,90,120,180,300,600,900,1800,3600];
   const TRUSTED_SOURCES = new Set(['saveCharts','platform','updateCharts','history']);
 
+  // ✅ [V14.3] مدد التداول المسموحة فعلياً من أزرار المنصة: S3,S15,S30,M1,M3,M5,M30,H1,H4
+  //   (لا يوجد 1/2/5/10ث — إرسالها يسبب IncorrectExpTime)
+  const PO_TRADE_DURATIONS = [3,15,30,60,180,300,1800,3600,14400];
+  function _snapTradeDuration(secs) {
+    const s = (!secs || secs <= 0) ? 3 : secs;
+    let best = PO_TRADE_DURATIONS[0];
+    for (const t of PO_TRADE_DURATIONS) { if (Math.abs(t - s) < Math.abs(best - s)) best = t; }
+    return Math.max(CFG.MIN_TRADE_SEC || 3, best); // الأقرب من المسموح، وبحد أدنى 3ث
+  }
+
   function snapToPOTime(secs) {
     if (!secs || secs <= 0) return 5;
     let best = PO_VALID_TIMES[0];
@@ -391,7 +401,8 @@
   function _safeAmount(amt) { return Math.max(1, Math.round(amt * 100) / 100); }
   function _rebuildPayloadCache() {
     const a = activeAsset || '';
-    const t = _tradeDuration > 0 ? _tradeDuration : snapToPOTime(candlePeriod || 5);
+    // ✅ [V14.3] الوقت المُرسَل = مدة المستخدم المختارة، مُثبّتة على مدة مسموحة فعلياً (يمنع IncorrectExpTime)
+    const t = _snapTradeDuration(_tradeDuration > 0 ? _tradeDuration : (candlePeriod || 3));
     const amt = tradeAmount;
     const d = isDemo;
     _payloadCache.prefixCall = '42["openOrder",{"asset":"'+a+'","amount":'+amt+',"action":"call","isDemo":'+d+',"requestId":';
@@ -449,7 +460,7 @@
     const action = direction === 'BUY' ? 'call' : 'put';
     const amt = overrideAmount || tradeAmount;
     const safeAmt = _safeAmount(amt);
-    const tradeSec = Math.max(CFG.MIN_TRADE_SEC, _tradeDuration || snapToPOTime(candlePeriod || 5));
+    const tradeSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 3));
     const rid = _nextReqId();
     if (!_payloadCache.prefixCall) _rebuildPayloadCache();
     const prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
@@ -1068,6 +1079,11 @@
   }
 
   function _extractFastCloseAt(settings, fullPayload) {
+    // ✅ [V14.3] التقط مدة المستخدم المختارة (زر S3/S15/...) من إعدادات الشارت أيضاً
+    try {
+      const ft = parseInt(settings && settings.fastTimeframe, 10);
+      if (Number.isFinite(ft) && ft >= 1 && ft !== _tradeDuration) { _tradeDuration = ft; _rebuildPayloadCache(); }
+    } catch(_) {}
     const fca = parseInt(settings.fastCloseAt || (fullPayload && fullPayload.fastCloseAt) || 0, 10);
     if (!Number.isFinite(fca) || fca <= 0) return;
     fastCloseAt = fca * 1000;
@@ -4218,7 +4234,7 @@
       _ghostConsecutive++;  // ✅ زيادة عداد الصفقات الوهمية المتتالية
       _ghostWatching = true;
       const entryPrice = _lastSignal ? _lastSignal.price : 0;
-      const tradeSec = Math.max(CFG.MIN_TRADE_SEC, _tradeDuration || snapToPOTime(candlePeriod || 5));
+      const tradeSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 3));
       addLog('👻 [GHOST-EXEC] محاكاة ' + direction + ' | ' + asset + ' @ ' + (entryPrice ? entryPrice.toFixed(5) : '?') + ' | $' + amount + ' | بدون رهان حقيقي', 'signal');
       // مقارنة سعر حقيقي بعد انتهاء مدة الصفقة — مثل النسخة الاحتياطية
       const expireMs = Math.max(tradeSec * 1000, 5000);
@@ -4812,7 +4828,7 @@
       const action = direction === 'BUY' ? 'call' : 'put';
       const amt = overrideAmount || tradeAmount;
       const safeAmt = _safeAmount(amt);
-      const tradeSec = Math.max(CFG.MIN_TRADE_SEC, _tradeDuration || snapToPOTime(candlePeriod || 5));
+      const tradeSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 3));
       const rid = _nextReqId();
 
       if (!_payloadCache.prefixCall) _rebuildPayloadCache();
