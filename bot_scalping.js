@@ -177,6 +177,9 @@
     ORACLE_SIG_TTL_MS       : 8000,        // ✅ صلاحية قوة المنصة الرقمية (تُحدّث كل ~5ث)
     ORACLE_CHAT_TTL_MS      : 90000,       // ✅ صلاحية إشارة الشات الاتجاهية (M1+ تبقى صالحة ~90ث)
     ORACLE_MIN_STRENGTH     : 3,           // ✅ الحد الأدنى لقوة إشارة المنصة (0-4) لاعتبارها تأكيداً
+    // ─── [V15] محرّك إشارات المنصة (PSE) — الأوراكل كمولّد صفقات ──────────────
+    PSE_ENABLED             : false,       // ✅ اختياري: إشارة الشات الرسمية تُولّد صفقة على الزوج النشط
+    PSE_CONF                : 88,          // ثقة الإشارة المولّدة من المنصة
 
     // ─── Socket Stability ──────────────────────────────────────────────
     WS_SELF_PING_ENABLED    : false,       // ✅ إيقاف PING الخاص — المنصة تدير PING/PONG بنفسها
@@ -4063,6 +4066,18 @@
         const dir = /UP/i.test(sig.forecast) ? 'BUY' : (/DOWN/i.test(sig.forecast) ? 'SELL' : null);
         if (!dir) return;
         _chatSig[a] = { dir, tf: sig.timeframe || '?', price: sig.price || 0, ts: Date.now() };
+        // ✅ [V15 — محرّك إشارات المنصة PSE] إشارة المنصة تُولّد صفقة (لا مجرد تأكيد)
+        //   اختياري ومُطفأ افتراضياً. يتداول الزوج النشط في اتجاه إشارة المنصة الرسمية.
+        if (CFG.PSE_ENABLED && _running && a === normalizeAsset(activeAsset)) {
+          addLog('🛰️ [PSE] إشارة منصة رسمية: ' + dir + ' | ' + a + ' | ' + (sig.timeframe||'?') + ' (مولّد)', 'signal');
+          _enqueueSignal({
+            direction: dir, asset: a,
+            price: (sig.price || _lastTradePrice || 0),
+            confidence: CFG.PSE_CONF,
+            pattern: 'platform_signal',
+            timestamp: Date.now(),
+          });
+        }
       } catch(_) {}
     }
     // أقصى قوة منصة على فريمات السكالب (≤ مدة الصفقة)
