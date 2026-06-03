@@ -177,9 +177,17 @@
     ORACLE_SIG_TTL_MS       : 8000,        // ✅ صلاحية قوة المنصة الرقمية (تُحدّث كل ~5ث)
     ORACLE_CHAT_TTL_MS      : 90000,       // ✅ صلاحية إشارة الشات الاتجاهية (M1+ تبقى صالحة ~90ث)
     ORACLE_MIN_STRENGTH     : 3,           // ✅ الحد الأدنى لقوة إشارة المنصة (0-4) لاعتبارها تأكيداً
-    // ─── [V15] محرّك إشارات المنصة (PSE) — الأوراكل كمولّد صفقات ──────────────
-    PSE_ENABLED             : false,       // ✅ اختياري: إشارة الشات الرسمية تُولّد صفقة على الزوج النشط
-    PSE_CONF                : 88,          // ثقة الإشارة المولّدة من المنصة
+    // ─── [V15/V16] محرّك إشارات المنصة (PSE) — الأوراكل كمولّد صفقات ──────────
+    PSE_ENABLED             : false,       // ✅ اختياري: تفعيل توليد الصفقات من الأوراكل
+    PSE_CONF                : 88,          // ثقة الإشارة المولّدة (تُرفع مع قوة المنصة)
+    PSE_USE_PLAT            : true,        // [V16] استخدم قوة signals/update كبوابة
+    PSE_USE_SLOPE           : true,        // [V16] استخدم ميل التيك لتحديد الاتجاه عند غياب الشات
+    PSE_SLOPE_MS            : 500,         // نافذة حساب الميل (ميلي ثانية)
+    PSE_SLOPE_MIN_REL       : 0.000020,   // أدنى عائد نسبي لاعتبار الميل اتجاهاً واضحاً
+    // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
+    ORACLE_LAB_ENABLED      : true,        // ✅ تسجيل خام: يربط كل صفقة بمصدرها ونتيجتها (آمن)
+    ORACLE_LAB_REPORT_EVERY : 10,          // اطبع جدول الأداء كل N صفقة
+    ORACLE_LAB_FLAT_REL     : 0.000001,   // عتبة اعتبار الميل «مسطّحاً»
 
     // ─── Socket Stability ──────────────────────────────────────────────
     WS_SELF_PING_ENABLED    : false,       // ✅ إيقاف PING الخاص — المنصة تدير PING/PONG بنفسها
@@ -320,6 +328,94 @@
   const currentCandles   = {};
   const tickBuffers      = {};
   const chaforState      = {};
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // [V16] مختبر الأوراكل (OracleLab) — التقاط خام عالي الدقة لتطوير الأوراكل
+  //   الهدف: قياس كل تيك بدقة ميلي ثانية + ربط كل صفقة بمصدرها (chat/plat/slope)
+  //   ونتيجتها، لمعرفة أي مصدر أدقّ وتوسيع اصطياد الأوراكل بناءً على بيانات حقيقية.
+  // ═══════════════════════════════════════════════════════════════════════
+  const OracleLab = (function () {
+    const ticks = {};   // asset -> [{t,p}] حلقة بدقة ميلي ثانية
+    const stats = {
+      chat:  { w:0, l:0 },
+      plat:  { 0:{w:0,l:0}, 1:{w:0,l:0}, 2:{w:0,l:0}, 3:{w:0,l:0}, 4:{w:0,l:0} },
+      slope: { agree:{w:0,l:0}, against:{w:0,l:0}, flat:{w:0,l:0} },
+      total: 0,
+    };
+    function onTick(a, price, now) {
+      const buf = ticks[a] || (ticks[a] = []);
+      buf.push({ t: now, p: price });
+      const cut = now - 6000;
+      while (buf.length && buf[0].t < cut) buf.shift();
+      if (buf.length > 1500) buf.shift();
+    }
+    // الميل اللحظي على نافذة ms: عائد نسبي + فرق مطلق + عدد تيكات + المعدّل
+    function microSlope(a, ms) {
+      const buf = ticks[a]; if (!buf || buf.length < 2) return null;
+      const last = buf[buf.length - 1], p1 = last.p, now = last.t;
+      let i = buf.length - 1; while (i > 0 && buf[i].t > now - ms) i--;
+      const p0 = buf[i].p, dt = now - buf[i].t, n = buf.length - 1 - i;
+      if (!(p0 > 0) || dt <= 0) return null;
+      return { rel: (p1 - p0) / p0, abs: p1 - p0, dt, ticks: n, ratePerSec: n / (dt / 1000) };
+    }
+    function snapshot(a, dir) {
+      const os = (typeof DualWSSManager !== 'undefined' && DualWSSManager.oracleState)
+        ? DualWSSManager.oracleState(a) : {};
+      return {
+        dir,
+        chatDir: os.chatDir || null, chatTf: os.chatTf || null, chatAge: os.chatAge,
+        platBest: os.platBest || 0, platTf: os.platTf || {},
+        s200: microSlope(a, 200), s500: microSlope(a, 500), s1000: microSlope(a, 1000),
+      };
+    }
+    function _fmtSlope(s) {
+      if (!s) return '—';
+      return (s.rel >= 0 ? '+' : '') + (s.rel * 1e6).toFixed(1) + 'e-6(n' + s.ticks + ')';
+    }
+    function recordClose(rec, win, openPrice, closePrice) {
+      if (!CFG.ORACLE_LAB_ENABLED) return;
+      const f = rec && rec.lab; if (!f) return;
+      stats.total++;
+      const dir = f.dir, hit = win ? 'w' : 'l';
+      // ① مصدر الاتجاه: شات؟
+      const chatAgree = f.chatDir && f.chatDir === dir;
+      if (chatAgree) stats.chat[hit]++;
+      // ② قوة المنصة (الكود الرقمي 0-4)
+      const lvl = Math.max(0, Math.min(4, f.platBest | 0));
+      stats.plat[lvl][hit]++;
+      // ③ ميل التيك (الأجزاء): اتفاق/تعارض/مسطّح على نافذة 500ms
+      const s = f.s500;
+      let slopeCls = 'flat';
+      if (s && Math.abs(s.rel) >= (CFG.ORACLE_LAB_FLAT_REL || 1e-6)) {
+        const slopeDir = s.rel > 0 ? 'BUY' : 'SELL';
+        slopeCls = (slopeDir === dir) ? 'agree' : 'against';
+      }
+      stats.slope[slopeCls][hit]++;
+      // سطر خام مُعلَّم (قابل للتحليل لاحقاً)
+      const tfStr = Object.keys(f.platTf || {}).map(k => k + ':' + f.platTf[k]).join(',');
+      addLog('🧪 [LAB] ' + (win ? 'WIN ' : 'LOSS') + ' | ' + dir +
+             ' | chat=' + (f.chatDir ? (chatAgree ? f.chatDir + '✓' : f.chatDir + '✗') + '/' + (f.chatTf||'?') : '—') +
+             ' | plat=' + lvl + '{' + tfStr + '}' +
+             ' | slope500=' + _fmtSlope(s) + '[' + slopeCls + ']' +
+             ' | px ' + (openPrice||0).toFixed(5) + '→' + (closePrice||0).toFixed(5),
+             win ? 'signal' : 'error');
+      if (stats.total % (CFG.ORACLE_LAB_REPORT_EVERY || 10) === 0) report();
+    }
+    function _pct(o) { const t = o.w + o.l; return t ? Math.round(o.w / t * 100) + '% (' + o.w + '/' + t + ')' : '—'; }
+    function report() {
+      if (!CFG.ORACLE_LAB_ENABLED) return;
+      const p = stats.plat;
+      addLog('🧪 [LAB-REPORT] إجمالي:' + stats.total +
+             ' | شات:' + _pct(stats.chat) +
+             ' | plat4:' + _pct(p[4]) + ' plat3:' + _pct(p[3]) +
+             ' plat2:' + _pct(p[2]) + ' plat≤1:' + _pct({ w: p[0].w + p[1].w, l: p[0].l + p[1].l }) +
+             ' | ميل-موافق:' + _pct(stats.slope.agree) +
+             ' ميل-معاكس:' + _pct(stats.slope.against) +
+             ' ميل-مسطّح:' + _pct(stats.slope.flat), 'info');
+    }
+    return { onTick, microSlope, snapshot, recordClose, report, _stats: stats };
+  })();
+  try { W._oracleLabReport = () => OracleLab.report(); } catch (_) {}
 
   // ETC stubs
   const ETC_MAX_HIST     = 30;
@@ -473,6 +569,7 @@
       tradeExec = true;
       lastTradeMs = Date.now();
       _pendingTradeRecord = { asset: asset || activeAsset, direction, amount: safeAmt, openTs: Date.now(), source: 'directWS' };
+      try { const _la = normalizeAsset(asset || activeAsset); const _tb = tickBuffers[_la]; _pendingTradeRecord.lab = OracleLab.snapshot(_la, direction); _pendingTradeRecord.openPrice = (_tb && _tb.length) ? _tb[_tb.length-1] : 0; } catch(_) {}  // [V16] لقطة ميزات الأوراكل عند الفتح
       addLog('⚡ [EXEC] ' + direction + ' | ' + (asset || activeAsset) + ' | $' + safeAmt + ' | ' + tradeSec + 'ث', 'signal');
       updateTradeBtn();
       // ✅ تحرير تلقائي لـ tradeExec بعد مدة الصفقة + 5 ثواني أمان
@@ -1381,6 +1478,7 @@
       if (win) addLog('📊 [PAYOUT] نسبة العائد: ' + Math.round(rawPayout * 100) + '%', 'info');
     }
     recordTrade(win, _lastTradeWasTVE);
+    try { OracleLab.recordClose(_pendingTradeRecord, win, _pendingTradeRecord && _pendingTradeRecord.openPrice, deal.closePrice || deal.price || 0); } catch(_) {}  // [V16] ربط النتيجة بمصدر الأوراكل
     const sym = win ? '✅' : '❌', amount = win ? '+'+deal.profit?.toFixed(2)+'$' : '-'+deal.amount+'$';
     addLog(sym+' '+amount, win?'signal':'error');
     _lastTradeWasDouble = false; tradeExec = false; updateTradeBtn();
@@ -1468,6 +1566,7 @@
     if (!tickBuffers[a]) tickBuffers[a] = [];
     tickBuffers[a].push(price);
     if (tickBuffers[a].length > 600) tickBuffers[a].shift();
+    try { OracleLab.onTick(a, price, now); } catch(_) {}   // [V16] التقاط خام عالي الدقة
     totalTicks++;
     if (!activeAsset) onActiveAsset(a, 'firstTick');
     const cc = currentCandles[a];
@@ -4057,6 +4156,7 @@
         rec.ts = now;
         for (const p of pairs) { if (Array.isArray(p) && p.length >= 2) rec.tf[p[0]] = p[1]; }
       }
+      try { _tryGenerate(activeAsset); } catch(_) {}   // [V16] قوة المنصة قد تُولّد صفقة
     }
     // إشارة الشات: forecast UP2/DOWN2, timeframe "M1".. → اتجاه صريح
     function onChatSignal(sig) {
@@ -4066,19 +4166,37 @@
         const dir = /UP/i.test(sig.forecast) ? 'BUY' : (/DOWN/i.test(sig.forecast) ? 'SELL' : null);
         if (!dir) return;
         _chatSig[a] = { dir, tf: sig.timeframe || '?', price: sig.price || 0, ts: Date.now() };
-        // ✅ [V15 — محرّك إشارات المنصة PSE] إشارة المنصة تُولّد صفقة (لا مجرد تأكيد)
-        //   اختياري ومُطفأ افتراضياً. يتداول الزوج النشط في اتجاه إشارة المنصة الرسمية.
-        if (CFG.PSE_ENABLED && _running && a === normalizeAsset(activeAsset)) {
-          addLog('🛰️ [PSE] إشارة منصة رسمية: ' + dir + ' | ' + a + ' | ' + (sig.timeframe||'?') + ' (مولّد)', 'signal');
-          _enqueueSignal({
-            direction: dir, asset: a,
-            price: (sig.price || _lastTradePrice || 0),
-            confidence: CFG.PSE_CONF,
-            pattern: 'platform_signal',
-            timestamp: Date.now(),
-          });
-        }
+        _tryGenerate(a);   // [V16] محاولة توليد صفقة (شات + منصة + ميل)
       } catch(_) {}
+    }
+    // ─── [V16] محرّك إشارات المنصة (PSE) — مولّد من 3 مصادر ──────────────────
+    //   اتجاه: الشات (إن وُجد) أو ميل التيك (أجزاء الأجزاء) | قوة: signals/update
+    function _tryGenerate(asset) {
+      if (!CFG.PSE_ENABLED || !_running) return;
+      const a = normalizeAsset(asset);
+      if (a !== normalizeAsset(activeAsset)) return;   // الزوج النشط فقط
+      if (_signalQueue || tradeExec) return;           // عند الخمول فقط
+      const cs = _chatSig[a];
+      const freshChat = cs && (Date.now() - cs.ts) < CFG.ORACLE_SIG_TTL_MS;
+      const st = platformStrength(a);
+      let dir = null, basis = null;
+      if (freshChat) { dir = cs.dir; basis = 'chat'; }            // ① اتجاه الشات الرسمي
+      else if (CFG.PSE_USE_SLOPE) {                                // ② ميل التيك اللحظي
+        const sl = OracleLab.microSlope(a, CFG.PSE_SLOPE_MS);
+        if (sl && Math.abs(sl.rel) >= CFG.PSE_SLOPE_MIN_REL) { dir = sl.rel > 0 ? 'BUY' : 'SELL'; basis = 'slope'; }
+      }
+      if (!dir) return;
+      // بوابة القوة: الشات يكفي وحده؛ غير ذلك يلزم قوة منصة كافية
+      if (basis !== 'chat' && !(CFG.PSE_USE_PLAT && st >= CFG.ORACLE_MIN_STRENGTH)) return;
+      const conf = Math.min(95, CFG.PSE_CONF + (st >= 4 ? 4 : st >= 3 ? 2 : 0));
+      addLog('🛰️ [PSE] مولّد: ' + dir + ' | ' + a + ' | أساس:' + basis + ' | قوة المنصة:' + st + ' | ثقة:' + conf, 'signal');
+      _enqueueSignal({
+        direction: dir, asset: a,
+        price: (_lastTradePrice || 0),
+        confidence: conf,
+        pattern: 'platform_' + basis,
+        timestamp: Date.now(),
+      });
     }
     // أقصى قوة منصة على فريمات السكالب (≤ مدة الصفقة)
     function platformStrength(asset) {
@@ -5004,6 +5122,19 @@
       onSignalsUpdate,
       onChatSignal,
       platformStrength,
+      // [V16] حالة الأوراكل الخام لزوج (لمختبر الأوراكل والمولّد)
+      oracleState: (asset) => {
+        const a = normalizeAsset(asset);
+        const cs = _chatSig[a], ps = _platSig[a], now = Date.now();
+        return {
+          chatDir: cs ? cs.dir : null,
+          chatTf:  cs ? cs.tf : null,
+          chatAge: cs ? (now - cs.ts) : null,
+          platBest: platformStrength(a),
+          platTf:  ps ? Object.assign({}, ps.tf) : {},
+          platAge: ps ? (now - ps.ts) : null,
+        };
+      },
       onCandleClose,
       onPlatformSignal,
       getLatencyGap:     () => _latencyGap,
