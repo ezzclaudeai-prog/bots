@@ -88,10 +88,11 @@
     SEE_MAX_MS               : 5000,
     MINI_BACKTEST_ENABLED    : false,
     IMDB_TIER_DOUBLE         : 70,
-    // [V22] الصفقات المزدوجة — ×2 عند إشارة قوية مؤكّدة بالأوراكل فقط (آمن)
-    DOUBLE_ON_STRONG         : true,       // ✅ ضاعف المبلغ عند إشارة قوية مؤكّدة
-    DOUBLE_MULT              : 2,          // مضاعف المبلغ (2 = مزدوجة)
-    DOUBLE_MIN_CONF          : 80,         // أدنى ثقة للمضاعفة
+    // [V22] مضاعفة المبلغ عند الإشارة القوية (الصفقات المزدوجة)
+    DOUBLE_ON_STRONG         : true,       // ✅ ضاعف المبلغ حسب قوة الإشارة
+    IMDB_TIER_TRIPLE         : 85,         // ثقة ≥85% → ×3
+    IMDB_TIER_QUAD           : 94,         // ثقة ≥94% → ×4
+    DOUBLE_MAX_MULT          : 4,          // أقصى مضاعفة
     SIGNAL_WATCHER_MS        : 25,
     SIGNAL_WATCHER_EXPIRY_MS : 1500,
     MAX_LOSS_STREAK          : 3,
@@ -164,7 +165,6 @@
     TREND_FILTER_MODE       : 'soft',      // ✅ [V13.6] 'soft'=خصم ثقة للمعاكس (يبقى سريعاً) | 'hard'=حظر تام
     TREND_SOFT_PENALTY      : 12,          // ✅ [V13.6] خصم الثقة للإشارة المعاكسة في الوضع الناعم
     COUNTERTREND_NEEDS_ORACLE: false,      // ✅ [V14.6] اختياري ومُطفأ: بيانات السجل أثبتت أن المعاكس 75% رابح — لا تحجبه
-    NO_ORACLE_MIN_CONF       : 72,         // [V21] بلا دعم أوراكل → اشترط ثقة نمط ≥ هذه (0=معطّل). يحمي من تذبذب السوق
     COUNTERTREND_MIN_CONF    : 90,         // عتبة الثقة لو فعّلته يدوياً
     EXHAUSTION_COOLDOWN_MS  : 4000,        // ✅ [V13.6] بعد الاستنفاد امنع اتجاه الاستمرار 4ث (كان 9 — أسرع)
     MIN_TRADE_SEC           : 3,           // ✅ [V14.2] حد أدنى لمدة الصفقة — المنصة ترفض <3ث (IncorrectExpTime)
@@ -190,26 +190,22 @@
     PSE_SLOPE_MS            : 500,         // نافذة حساب الميل (ميلي ثانية)
     PSE_SLOPE_MIN_REL       : 0.000020,   // أدنى عائد نسبي لاعتبار الميل اتجاهاً واضحاً
     // ─── [V18] التقييم السريع داخل الشمعة — تسريع تكرار التداول ──────────────
-    FAST_EVAL_ENABLED       : true,        // ✅ قيّم الأنماط داخل الشمعة (لا تنتظر إغلاقها)
+    //   ⛔ [V22-CC] مُعطَّل: كان يقيّم الأنماط على شمعة غير مكتملة → دخول مبكر على
+    //   ارتداد وهمي ثم انعكاس (مصدر معظم الخسائر في سجل AEDCNY). الآن: لا تقييم إلا
+    //   عند إغلاق الشمعة الفعلي (نمط مكتمل ومؤكَّد).
+    FAST_EVAL_ENABLED       : false,       // ⛔ انتظر إغلاق الشمعة — لا تقييم داخلها
     FAST_EVAL_MS            : 1500,        // أدنى فاصل بين تقييمين سريعين (مللي ثانية)
     FAST_EVAL_MIN_TICKS     : 4,           // أدنى عدد تيكات في الشمعة المتشكّلة قبل تقييمها
     // ─── [V17] محرّك توقيت الدخول (ETE) — لا تدخل إلا حين يوافق الزخم اللحظي ──
     ENTRY_TIMING_ENABLED    : true,        // ✅ تأجيل الدخول حتى يوافق ميل التيك اتجاه الصفقة
     ETE_SLOPE_MS            : 1200,        // نافذة قياس الزخم اللحظي عند الدخول (ميلي ثانية)
     ETE_MIN_REL             : 0.000020,   // أدنى عائد نسبي ليُعدّ الميل اتجاهاً (وإلا «مسطّح»)
-    ETE_FLAT_WAITS          : true,        // ✅ [V22.3] الزخم المسطّح ينتظر زخماً حقيقياً ثم يُلغى (لا يدخل فوراً) — كل صفقات «مسطّح» خسرت في الأزواج المثبّتة كـAEDCNY
     ETE_MAX_WAIT_MS         : 0,           // 0 = تلقائي حسب عمر الصفقة | >0 = override ثابت بالملي
     ETE_WAIT_FRAC           : 0.30,        // نسبة عمر الصفقة المسموح انتظارها للدخول (30% من time)
     ETE_WAIT_MIN_MS         : 600,         // حدّ أدنى للانتظار (لفريمات 3-4ث)
     ETE_WAIT_MAX_MS         : 5000,        // حدّ أقصى للانتظار (لفريمات 15ث+)
     ETE_POLL_MS             : 120,         // فحص الموافقة كل N ميلي ثانية
     ETE_ON_TIMEOUT          : 'skip',      // عند انتهاء المهلة دون توافق: 'skip' إلغاء | 'enter' دخول
-    // ─── [V23] SuperTrend — يحسب نفس مؤشر الرسم (SuperTrend 5 3) ويدخل على أسهم Buy/Sell ──
-    ST_ENABLED              : true,        // ✅ تفعيل إشارات SuperTrend (انعكاس الاتجاه = سهم على الرسم)
-    ST_PERIOD              : 5,           // طول ATR (الرقم الأول في «SuperTrend 5 3»)
-    ST_MULT                : 3,           // المضاعِف (الرقم الثاني)
-    ST_BASE_CONF           : 82,          // ثقة إشارة الانعكاس (تتجاوز أرضية بلا-أوراكل 72%)
-    ST_AS_TREND_FILTER     : true,        // ✅ استخدم اتجاه SuperTrend كمرشّح: ارفض الأنماط المعاكسة له
     // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
     ORACLE_LAB_ENABLED      : true,        // ✅ تسجيل خام: يربط كل صفقة بمصدرها ونتيجتها (آمن)
     ORACLE_LAB_REPORT_EVERY : 10,          // اطبع جدول الأداء كل N صفقة
@@ -314,7 +310,6 @@
   let _lastTrendDirection = 'NEUTRAL';
   let _trendEmaStack = [];
   // ✅ [V13.4] حالة الاستنفاد الاتجاهي + سجل أداء الأنماط الحي
-  let _lastSTDir    = null;    // [V23] اتجاه SuperTrend الحالي ('BUY'/'SELL')
   let _exhaustDir   = null;    // 'UP' أو 'DOWN' — اتجاه آخر استنفاد مكتشف
   let _exhaustUntil = 0;       // وقف اتجاه الاستمرار حتى هذا الوقت
   let _lastExhaustLogTs = 0;   // ✅ [V14.2] تقييد تكرار سجل الاستنفاد
@@ -1437,7 +1432,7 @@
   function processHistoryFast(asset, period, history) {
     const a = normalizeAsset(asset);
     if (!Array.isArray(history) || history.length < 4) return;
-    if (!candlePeriod && period && period>0) { candlePeriod = Math.max(5, period); durSource = 'history'; updateHUD(); }  // [V22.2] حدّ أدنى 5ث
+    if (!candlePeriod && period && period>0) { candlePeriod = period; durSource = 'history'; updateHUD(); }
     const periodSec = candlePeriod || period || 5;
     const groups = {};
     for (const item of history) {
@@ -1576,8 +1571,6 @@
 
   function onPlatformTimeframe(secs, source) {
     if (!Number.isFinite(secs) || secs<1 || secs>3600) return;
-    // [V22.2] لا يوجد فريم أقل من 5ث في المنصة — اقفز للحدّ الأدنى الصالح (يمنع كشف 1ث الشاذ في وضع الخط)
-    if (secs < 5) secs = 5;
     if (secs === candlePeriod) return;
     candlePeriod = secs; durSource = source||'platform'; _lastDetectedPeriod = secs; _lastDetectedCount = CFG.PERIOD_TRUSTED_OVERRIDE;
     _periodLockUntil = Date.now() + 30000;
@@ -4530,31 +4523,9 @@
         // لا return — نكمل لتقييم النمط؛ بوابة الاستنفاد الاتجاهي تتكفّل بالباقي
       }
 
-      // ═══ [V23] SuperTrend — يلتقط انعكاسات الاتجاه (أسهم Buy/Sell على الرسم) ═══
-      let _stSig = null;
-      if (CFG.ST_ENABLED) {
-        const st = _computeSuperTrend(candles, CFG.ST_PERIOD, CFG.ST_MULT);
-        if (st) {
-          _lastSTDir = st.dir;
-          if (st.flip) {
-            addLog('🟢🔴 [SUPERTREND] انعكاس → ' + st.dir + ' @ ' + candles[candles.length-1].close.toFixed(5) + ' (مثل سهم الرسم)', 'signal');
-            _stSig = {
-              direction: st.dir, asset: a, price: candles[candles.length-1].close,
-              confidence: CFG.ST_BASE_CONF, pattern: 'supertrend_flip', timestamp: Date.now(),
-            };
-          }
-        }
-      }
-
       // ═══ فحص تكرار النمط — منع نفس النمط من التكرار بسرعة ═══
       // ✅ [V13.4] مرّر تاريخاً كافياً لتفعيل فحص القمة/القاع (كان slice(-5) يُعطّله)
-      //   [V23] انعكاس SuperTrend له الأولوية (إشارة الرسم)، ثم أنماط الشموع كاحتياط
-      let signal = _stSig || _evaluateCandlePattern(candles.slice(-(CFG.THREE_CANDLE_PEAK_WINDOW + 5)));
-      // [V23] مرشّح اتجاه SuperTrend: ارفض أنماط الشموع المعاكسة لاتجاه SuperTrend الحالي
-      if (signal && CFG.ST_AS_TREND_FILTER && !_stSig && _lastSTDir && signal.direction !== _lastSTDir) {
-        addLog('🚫 [ST-FILTER] ' + signal.direction + ' مرفوض — معاكس لاتجاه SuperTrend (' + _lastSTDir + ')', 'info');
-        return;
-      }
+      const signal = _evaluateCandlePattern(candles.slice(-(CFG.THREE_CANDLE_PEAK_WINDOW + 5)));
       if (signal) {
         if (_isPatternFatigued(signal)) {
           addLog('🔄 [PATTERN-FATIGUE] نمط ' + signal.pattern + ' مكرر — حاجز إعادة التسليح نشط', 'info');
@@ -4582,8 +4553,7 @@
         // ✅ [V13.6] فلتر الاتجاه — وضعان: 'hard'=حظر تام | 'soft'=خصم ثقة (يبقى السكالبينغ سريعاً)
         let _effConf = signal.confidence;
         let _counterTrend = false;
-        // [V23] انعكاس SuperTrend يُعرّف اتجاهاً جديداً → معفى من خصم «عكس الاتجاه»
-        if (signal.pattern !== 'supertrend_flip' && !_trendAllows(signal.direction)) {
+        if (!_trendAllows(signal.direction)) {
           if (CFG.TREND_FILTER_MODE === 'hard') {
             addLog('🚫 [TREND-BLOCK] ' + signal.direction + ' ممنوع — الاتجاه: ' + _lastTrendDirection, 'info');
             return;
@@ -4610,13 +4580,6 @@
         const _oracleConfirmed = (_orc.reason === 'chat-confirm' || _orc.reason === 'plat-strength');
         if (_oracleConfirmed) {
           addLog('🔮 [ORACLE-OK] ' + signal.direction + ' مؤكَّد — ' + _orc.reason + (_orc.strength ? ' قوة:' + _orc.strength : '') + ' | قوة المنصة الآن: ' + (DualWSSManager.platformStrength ? DualWSSManager.platformStrength(signal.asset) : '?'), 'info');
-        }
-
-        // ✅ [V21] أرضية ثقة للصفقات بلا دعم أوراكل (chat=— و plat<3) — ملف الخسارة
-        //   في السوق المتذبذب (بيانات عدة جلسات). تشترط ثقة نمط أعلى لها.
-        if (CFG.NO_ORACLE_MIN_CONF > 0 && !_oracleConfirmed && signal.confidence < CFG.NO_ORACLE_MIN_CONF) {
-          addLog('🛡️ [NO-ORACLE] ' + signal.direction + ' مرفوض — بلا دعم أوراكل وثقة ' + signal.confidence + '% < ' + CFG.NO_ORACLE_MIN_CONF + '%', 'info');
-          return;
         }
 
         // ✅ [V14.6] قاعدة مدعومة بالبيانات: المعاكس للاتجاه + بلا تأكيد منصة = ملف الخسارة.
@@ -4754,48 +4717,6 @@
     }
 
     // ─── تقييم نمط الشموع ─────────────────────────────────────────────
-    // ✅ [V23] SuperTrend — نفس مؤشر الرسم. يُرجِع الاتجاه الحالي + هل انعكس على آخر شمعة (= سهم Buy/Sell)
-    function _computeSuperTrend(candles, period, mult) {
-      const n = candles.length;
-      if (n < period + 2) return null;
-      // True Range
-      const tr = new Array(n);
-      for (let i = 0; i < n; i++) {
-        const h = candles[i].high, l = candles[i].low;
-        const pc = i > 0 ? candles[i-1].close : candles[i].close;
-        tr[i] = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
-      }
-      // ATR (Wilder RMA)
-      const atr = new Array(n).fill(0);
-      let seed = 0; for (let i = 0; i < period; i++) seed += tr[i]; seed /= period;
-      atr[period - 1] = seed;
-      for (let i = period; i < n; i++) atr[i] = (atr[i-1] * (period - 1) + tr[i]) / period;
-      // النطاقات + الاتجاه (صياغة TradingView القياسية)
-      let prevUp = 0, prevDn = 0, trend = 1, prevTrend = 1, trendBeforeLast = 1;
-      for (let i = period - 1; i < n; i++) {
-        const hl2 = (candles[i].high + candles[i].low) / 2;
-        let up = hl2 - mult * atr[i];          // نطاق سفلي (دعم — يُستخدم في الصعود)
-        let dn = hl2 + mult * atr[i];          // نطاق علوي (مقاومة — يُستخدم في الهبوط)
-        const cPrev = i > 0 ? candles[i-1].close : candles[i].close;
-        if (i > period - 1) {
-          up = cPrev > prevUp ? Math.max(up, prevUp) : up;
-          dn = cPrev < prevDn ? Math.min(dn, prevDn) : dn;
-          if (prevTrend === -1 && candles[i].close > prevDn) trend = 1;
-          else if (prevTrend === 1 && candles[i].close < prevUp) trend = -1;
-          else trend = prevTrend;
-        } else {
-          trend = candles[i].close >= dn ? 1 : -1;
-        }
-        if (i === n - 1) trendBeforeLast = prevTrend;
-        prevUp = up; prevDn = dn; prevTrend = trend;
-      }
-      return {
-        dir: trend === 1 ? 'BUY' : 'SELL',
-        flip: trend !== trendBeforeLast,
-        line: trend === 1 ? prevUp : prevDn,
-      };
-    }
-
     function _evaluateCandlePattern(candles) {
       if (candles.length < 3) return null;
 
@@ -5083,18 +5004,16 @@
       _lastExecutedPattern = signal.pattern + ':' + signal.asset;
       _lastExecutedPatternTs = _now;
 
-      // [V22] الصفقات المزدوجة — ×2 فقط عند إشارة قوية **مؤكّدة بالأوراكل** (آمن:
-      //   يضاعف ملف الربح لا التذبذب). شرط: (شات يؤكّد أو قوة منصة≥3) + ثقة عالية.
+      // [V22] الصفقات المزدوجة — ضاعف المبلغ حسب قوة الإشارة (70%→×2، 85%→×3، 94%→×4)
       let _execAmount = tradeAmount;
       if (CFG.DOUBLE_ON_STRONG) {
-        const _plat = platformStrength(signal.asset);
-        const _cs = _chatSig[normalizeAsset(signal.asset)];
-        const _oracleOk = (_cs && _cs.dir === signal.direction) || _plat >= CFG.ORACLE_MIN_STRENGTH;
-        if (_oracleOk && (signal.confidence || 0) >= CFG.DOUBLE_MIN_CONF) {
-          _execAmount = _safeAmount(tradeAmount * CFG.DOUBLE_MULT);
+        const _c = signal.confidence || 0;
+        const _mult = _c >= CFG.IMDB_TIER_QUAD ? 4 : _c >= CFG.IMDB_TIER_TRIPLE ? 3 : _c >= CFG.IMDB_TIER_DOUBLE ? 2 : 1;
+        if (_mult > 1) {
+          _execAmount = _safeAmount(tradeAmount * Math.min(_mult, CFG.DOUBLE_MAX_MULT));
           _lastTradeWasDouble = true;
           STATS.doubles = (STATS.doubles || 0) + 1;
-          addLog('🔥 [DOUBLE] إشارة قوية مؤكّدة بالأوراكل (' + (_cs && _cs.dir === signal.direction ? 'شات' : 'منصة:' + _plat) + ') → ×' + CFG.DOUBLE_MULT + ' = $' + _execAmount, 'signal');
+          addLog('🔥 [DOUBLE] إشارة قوية ' + _c + '% → ×' + _mult + ' = $' + _execAmount, 'signal');
         }
       }
 
@@ -5149,14 +5068,11 @@
       const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 5));
       const deadline = Date.now() + maxWait;
       const first = _entryAligned(asset, direction);
-      // [V22.3] الزخم المسطّح لا يدخل فوراً — ينتظر ميلاً حقيقياً (كل صفقات «مسطّح» خسرت)
-      const _flatBlocks = (CFG.ETE_FLAT_WAITS !== false) && first.reason === 'مسطّح';
-      if (first.ok && !_flatBlocks) {
+      if (first.ok) {
         if (first.sl) addLog('🎯 [ENTRY] دخول فوري — الزخم ' + first.reason + ' يوافق ' + direction, 'signal');
         _executeDualTrade(direction, asset, amount); return;
       }
-      const _waitWord = _flatBlocks ? 'بلا زخم (مسطّح)' : (first.reason + ' يعاكس');
-      addLog('⏳ [ENTRY] انتظار توقيت — الزخم ' + _waitWord + ' ' + direction + ' | مهلة ' + maxWait + 'ms (' + Math.round(CFG.ETE_WAIT_FRAC*100) + '% من ' + durSec + 'ث)', 'info');
+      addLog('⏳ [ENTRY] انتظار توقيت — الزخم ' + first.reason + ' يعاكس ' + direction + ' | مهلة ' + maxWait + 'ms (' + Math.round(CFG.ETE_WAIT_FRAC*100) + '% من ' + durSec + 'ث)', 'info');
       _entryTimer = setInterval(() => {
         if (!_running || tradeExec) { clearInterval(_entryTimer); _entryTimer = null; return; }
         const c = _entryAligned(asset, direction);
@@ -5192,15 +5108,8 @@
       const rid = _nextReqId();
 
       if (!_payloadCache.prefixCall) _rebuildPayloadCache();
-      let prefix, suffix;
-      if (overrideAmount && Math.abs(safeAmt - tradeAmount) > 1e-9) {
-        // [V22] payload مخصّص بالمبلغ الفعلي — يصلح إرسال الصفقات المزدوجة فعلياً
-        prefix = '42["openOrder",{"asset":"'+(asset||activeAsset||'')+'","amount":'+safeAmt+',"action":"'+action+'","isDemo":'+isDemo+',"requestId":';
-        suffix = ',"optionType":100,"time":'+tradeSec+'}]';
-      } else {
-        prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
-        suffix = action === 'call' ? _payloadCache.suffixCall : _payloadCache.suffixPut;
-      }
+      const prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
+      const suffix = action === 'call' ? _payloadCache.suffixCall : _payloadCache.suffixPut;
       const msg = prefix + rid + suffix;
 
       try {
