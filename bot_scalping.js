@@ -93,6 +93,9 @@
     IMDB_TIER_TRIPLE         : 85,         // ثقة ≥85% → ×3
     IMDB_TIER_QUAD           : 94,         // ثقة ≥94% → ×4
     DOUBLE_MAX_MULT          : 4,          // أقصى مضاعفة
+    // [V22-2X] صفقتين حقيقيتين عند التأكد (يرسل أمرين فعليين — المضاعفة القديمة كانت تجميلية فقط)
+    TWO_TRADES_ENABLED       : true,       // ✅ أرسِل صفقتين عند الثقة العالية
+    TWO_TRADES_MIN_CONF      : 70,         // ثقة ≥ هذه → صفقتان بدل واحدة
     SIGNAL_WATCHER_MS        : 25,
     SIGNAL_WATCHER_EXPIRY_MS : 1500,
     MAX_LOSS_STREAK          : 3,
@@ -120,11 +123,11 @@
     // ─── Dual-WSS Latency Arbitrage ──────────────────────────────────
     DUAL_WSS_ENABLED        : true,
     DUAL_WSS_MIN_GAP_MS     : 150,        // الحد الأدنى لفجوة الكمون (مللي ثانية)
-    DUAL_WSS_SYNTHETIC_DELAY : 300,       // تأخير اصطناعي إذا كانت الفجوة أقل من الحد الأدنى
+    DUAL_WSS_SYNTHETIC_DELAY : 0,         // [V22-FAST] أُلغي التأخير الاصطناعي — دخول فوري
     DUAL_WSS_PING_INTERVAL  : 5000,       // فاصل قياس الكمون (مللي ثانية)
     DUAL_WSS_RECONNECT_DELAY: 3000,       // تأخير إعادة الاتصال عند الفشل
     DUAL_WSS_MAX_SIGNAL_AGE : 2000,       // أقصى عمر للإشارة (مللي ثانية) قبل الرفض
-    DUAL_WSS_JITTER_MS      : 50,         // اهتزاز التنفيذ (مللي ثانية)
+    DUAL_WSS_JITTER_MS      : 0,          // [V22-FAST] بلا اهتزاز — دخول فوري
 
     // ─── حماية متقدمة ──────────────────────────────────────────────
     MIN_CONFIDENCE_THRESHOLD: 75,          // حد الثقة الأدنى — يتحكم به سلايدر الواجهة
@@ -147,7 +150,7 @@
     MAX_CONSEC_SAME_DIR     : 2,          // حد الصفقات المتتالية في نفس الاتجاه (2 = أقصى صفقتين BUY أو SELL متتاليتين)
     CONSEC_CONF_PENALTY     : 20,         // خصم من الثقة لكل صفقة متتالية في نفس الاتجاه (20% → 80% تصبح 60%)
     PATTERN_REARM_ENABLED   : true,       // حاجز إعادة تسليح النمط — نفس النمط لا يكرر خلال فترة الحماية
-    PATTERN_REARM_MIN_MS    : 10000,      // الحد الأدنى لنافذة إعادة التسليح (10 ثانية) — تقليل الانتظار على الفريمات القصيرة
+    PATTERN_REARM_MIN_MS    : 5000,       // [V22-FAST] 5ث (كان 10) — إعادة تسليح أسرع للنمط
     MAX_TRADES_PER_WINDOW   : 12,         // ✅ [V14.5] سقف الصفقات/دقيقة (12 بدل 4 — تسريع السكالبينغ)
     TRADE_WINDOW_MS         : 60000,      // نافذة العد: 60 ثانية
 
@@ -1490,7 +1493,12 @@
   }
 
   function processCloseOrder(data) {
-    if (!data.deals || !data.deals[0]) return;
+    if (!data.deals || !data.deals.length) return;
+    // [V22-2X] قد تُغلق صفقتان معاً في نفس الحدث — عالج كل صفقات البوت
+    if (data.deals.length > 1) {
+      for (const d of data.deals) processCloseOrder({ deals: [d] });
+      return;
+    }
     const deal = data.deals[0];
     if (botOrderIds.size > 0 && !botOrderIds.has(deal.id)) { addLog('📊 صفقة منصة: '+(deal.profit>0?'+':'')+(deal.profit||0).toFixed(2)+'$','info'); return; }
     if (deal.id) botOrderIds.delete(deal.id);
@@ -5004,35 +5012,30 @@
       _lastExecutedPattern = signal.pattern + ':' + signal.asset;
       _lastExecutedPatternTs = _now;
 
-      // [V22] الصفقات المزدوجة — ضاعف المبلغ حسب قوة الإشارة (70%→×2، 85%→×3، 94%→×4)
-      let _execAmount = tradeAmount;
-      if (CFG.DOUBLE_ON_STRONG) {
-        const _c = signal.confidence || 0;
-        const _mult = _c >= CFG.IMDB_TIER_QUAD ? 4 : _c >= CFG.IMDB_TIER_TRIPLE ? 3 : _c >= CFG.IMDB_TIER_DOUBLE ? 2 : 1;
-        if (_mult > 1) {
-          _execAmount = _safeAmount(tradeAmount * Math.min(_mult, CFG.DOUBLE_MAX_MULT));
-          _lastTradeWasDouble = true;
-          STATS.doubles = (STATS.doubles || 0) + 1;
-          addLog('🔥 [DOUBLE] إشارة قوية ' + _c + '% → ×' + _mult + ' = $' + _execAmount, 'signal');
-        }
+      // [V22-2X] صفقتان حقيقيتان عند الثقة العالية (يُرسَل أمران فعليان — أصدق من مضاعفة المبلغ التجميلية)
+      const _execAmount = tradeAmount;
+      let _tradeCount = 1;
+      if (CFG.TWO_TRADES_ENABLED && (signal.confidence || 0) >= CFG.TWO_TRADES_MIN_CONF) {
+        _tradeCount = 2;
+        _lastTradeWasDouble = true;
+        STATS.doubles = (STATS.doubles || 0) + 1;
+        addLog('🔥 [2X] إشارة قوية ' + signal.confidence + '% → صفقتان × $' + _execAmount, 'signal');
       }
 
-      // حساب التأخير الاصطناعي + [V22] إزاحة التوقيت اليدوية (زر ⚡ توقيت التنفيذ)
-      //   _timingOffset سالب = دخول أبكر | موجب = أبطأ. الآن موصول فعلياً.
+      // [V22] إزاحة التوقيت اليدوية (زر ⚡ توقيت التنفيذ) — التأخير الاصطناعي أُلغي (سرعة)
       const synthDelay = _getSyntheticDelay();
-      const jitter = Math.round((Math.random() - 0.5) * 2 * CFG.DUAL_WSS_JITTER_MS);
+      const jitter = CFG.DUAL_WSS_JITTER_MS ? Math.round((Math.random() - 0.5) * 2 * CFG.DUAL_WSS_JITTER_MS) : 0;
       const totalDelay = Math.max(0, synthDelay + jitter + _timingOffset);
 
       if (totalDelay > 0) {
-        addLog('🔮 [DELAY] تأخير اصطناعي: ' + totalDelay + 'مللي ثانية (فجوة: ' +
-               Math.abs(_latencyGap).toFixed(0) + 'ms)', 'info');
+        addLog('🔮 [DELAY] تأخير: ' + totalDelay + 'مللي ثانية', 'info');
         if (_queueTimer) clearTimeout(_queueTimer);
         _queueTimer = setTimeout(() => {
           _queueTimer = null;
-          _timedExecute(signal.direction, signal.asset, _execAmount);
+          _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount);
         }, totalDelay);
       } else {
-        _timedExecute(signal.direction, signal.asset, _execAmount);
+        _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount);
       }
     }
 
@@ -5061,8 +5064,8 @@
       const ms = Math.round(durSec * 1000 * CFG.ETE_WAIT_FRAC);
       return Math.max(CFG.ETE_WAIT_MIN_MS, Math.min(CFG.ETE_WAIT_MAX_MS, ms));
     }
-    function _timedExecute(direction, asset, amount) {
-      if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount); return; }
+    function _timedExecute(direction, asset, amount, count) {
+      if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount, count); return; }
       if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
       const maxWait = _eteMaxWait();
       const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 5));
@@ -5070,7 +5073,7 @@
       const first = _entryAligned(asset, direction);
       if (first.ok) {
         if (first.sl) addLog('🎯 [ENTRY] دخول فوري — الزخم ' + first.reason + ' يوافق ' + direction, 'signal');
-        _executeDualTrade(direction, asset, amount); return;
+        _executeDualTrade(direction, asset, amount, count); return;
       }
       addLog('⏳ [ENTRY] انتظار توقيت — الزخم ' + first.reason + ' يعاكس ' + direction + ' | مهلة ' + maxWait + 'ms (' + Math.round(CFG.ETE_WAIT_FRAC*100) + '% من ' + durSec + 'ث)', 'info');
       _entryTimer = setInterval(() => {
@@ -5079,12 +5082,12 @@
         if (c.ok && c.reason !== 'مسطّح') {
           clearInterval(_entryTimer); _entryTimer = null;
           addLog('🎯 [ENTRY] الزخم توافق (' + c.reason + ') — دخول ' + direction, 'signal');
-          _executeDualTrade(direction, asset, amount);
+          _executeDualTrade(direction, asset, amount, count);
         } else if (Date.now() >= deadline) {
           clearInterval(_entryTimer); _entryTimer = null;
           if (CFG.ETE_ON_TIMEOUT === 'enter') {
             addLog('🎯 [ENTRY] انتهت المهلة — دخول رغم عدم التوافق ' + direction, 'info');
-            _executeDualTrade(direction, asset, amount);
+            _executeDualTrade(direction, asset, amount, count);
           } else {
             addLog('🚫 [ENTRY] انتهت المهلة دون توافق — إلغاء ' + direction + ' (تجنّب توقيت سيّئ)', 'info');
           }
@@ -5092,7 +5095,7 @@
       }, CFG.ETE_POLL_MS);
     }
 
-    function _executeDualTrade(direction, asset, overrideAmount) {
+    function _executeDualTrade(direction, asset, overrideAmount, count) {
       if (!autoTrade) return;
       if (tradeExec) return;
       if (!tradeWSOrig || !tradeWS || tradeWS.readyState !== 1) {
@@ -5105,15 +5108,16 @@
       const amt = overrideAmount || tradeAmount;
       const safeAmt = _safeAmount(amt);
       const tradeSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 3));
-      const rid = _nextReqId();
+      const nOrders = Math.max(1, Math.min(count || 1, 2));   // [V22-2X] حتى صفقتين
 
       if (!_payloadCache.prefixCall) _rebuildPayloadCache();
       const prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
       const suffix = action === 'call' ? _payloadCache.suffixCall : _payloadCache.suffixPut;
-      const msg = prefix + rid + suffix;
 
       try {
-        tradeWSOrig(msg);
+        for (let k = 0; k < nOrders; k++) {
+          tradeWSOrig(prefix + _nextReqId() + suffix);   // [V22-2X] أمر فعلي لكل صفقة
+        }
         tradeExec = true;
         lastTradeMs = Date.now();
         // ✅ تحرير تلقائي لـ tradeExec بعد مدة الصفقة + 5 ثواني أمان
@@ -5137,7 +5141,7 @@
         _lastTradePrice = _lastSignal ? _lastSignal.price : 0;
         // ✅ مسح الإشارة المعلقة بعد التنفيذ الناجح
         _pendingRetrySignal = null;
-        addLog('⚡ [DUAL-EXEC] ' + direction + ' | ' + (asset || activeAsset) + ' | $' + safeAmt + ' | ' + tradeSec + 'ث', 'signal');
+        addLog('⚡ [DUAL-EXEC] ' + direction + ' | ' + (asset || activeAsset) + ' | $' + safeAmt + (nOrders > 1 ? ' ×' + nOrders : '') + ' | ' + tradeSec + 'ث', 'signal');
         updateTradeBtn();
       } catch(err) {
         addLog('❌ [DUAL-WSS] فشل إرسال الأمر: ' + err.message, 'error');
