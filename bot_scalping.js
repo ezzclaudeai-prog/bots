@@ -131,6 +131,7 @@
 
     // ─── حماية متقدمة ──────────────────────────────────────────────
     MIN_CONFIDENCE_THRESHOLD: 75,          // حد الثقة الأدنى — يتحكم به سلايدر الواجهة
+    ABSOLUTE_MIN_CONF       : 60,          // [V22-FLOOR] أرضية صارمة — لا صفقة تحت 60% مهما كان السلايدر (تحذف صفقات 50% الهشّة)
     GHOST_TRADE_ENABLED     : true,        // صفقة وهمية بعد أول خسارة
     GHOST_TRIGGER_STREAK    : 2,           // ✅ [V13.6] فعّل Ghost فقط بعد N خسائر متتالية (2 بدل 1 — أسرع)
     GHOST_MAX_CONSECUTIVE   : 1,           // ✅ [V13.6] عدد الصفقات الوهمية قبل العودة للحقيقي (1 بدل 2 — أسرع)
@@ -2117,7 +2118,7 @@
       </div>
       <div class="cb-conf-slider-row" style="display:flex;align-items:center;gap:6px;padding:4px 10px;">
         <span style="font-size:10px;color:#7c8d9b;min-width:58px;">🎯 ثقة ≥</span>
-        <input type="range" id="cbConfSlider" min="50" max="95" value="75" style="flex:1;accent-color:#00d264;height:4px;">
+        <input type="range" id="cbConfSlider" min="60" max="95" value="75" style="flex:1;accent-color:#00d264;height:4px;">
         <span style="font-size:11px;font-weight:700;color:#00d264;min-width:28px;text-align:right;" id="cbConfSliderVal">75%</span>
       </div>
       <div class="cb-timing-row">
@@ -4552,7 +4553,7 @@
 
         // ✅ [V13.4] ثقة تكيفية — ارفع عتبة القبول للأنماط الخاسرة حياً، وعطّل الضعيف جداً
         const _adapt = _adaptiveConfGate(signal.pattern);
-        const _effThreshold = _minConfThreshold + _adapt.bump;
+        const _effThreshold = Math.max(_minConfThreshold + _adapt.bump, CFG.ABSOLUTE_MIN_CONF);  // [V22-FLOOR] أرضية 60%
         if (_adapt.disabled) {
           addLog('🚫 [PATTERN-OFF] ' + signal.pattern + ' معطّل مؤقتاً — معدل فوز حي منخفض', 'info');
           return;
@@ -4628,9 +4629,10 @@
           pattern: 'platform_signal',
           timestamp: Date.now(),
         };
-        // فلتر ثقة
-        if (signal.confidence < _minConfThreshold) {
-          addLog('🔮 [SIGNAL-DISCARD] ' + dir + ' | ثقة منخفضة: ' + signal.confidence + '% < ' + _minConfThreshold + '%', 'info');
+        // فلتر ثقة — [V22-FLOOR] أرضية صارمة 60%
+        const _platFloor = Math.max(_minConfThreshold, CFG.ABSOLUTE_MIN_CONF);
+        if (signal.confidence < _platFloor) {
+          addLog('🔮 [SIGNAL-DISCARD] ' + dir + ' | ثقة منخفضة: ' + signal.confidence + '% < ' + _platFloor + '%', 'info');
           return;
         }
         // فلتر اتجاه
