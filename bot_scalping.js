@@ -213,6 +213,7 @@
     ENTRY_TIMING_ENABLED    : true,        // ✅ تأجيل الدخول حتى يوافق ميل التيك اتجاه الصفقة
     ETE_SLOPE_MS            : 1200,        // نافذة قياس الزخم اللحظي عند الدخول (ميلي ثانية)
     ETE_MIN_REL             : 0.000020,   // أدنى عائد نسبي ليُعدّ الميل اتجاهاً (وإلا «مسطّح»)
+    ETE_FLAT_WAITS          : true,        // ✅ [V24] الزخم المسطّح ينتظر ميلاً حقيقياً ثم يُلغى (لا يدخل فوراً) — أوقف خسارة الـ$4000
     ETE_MAX_WAIT_MS         : 0,           // 0 = تلقائي حسب عمر الصفقة | >0 = override ثابت بالملي
     ETE_WAIT_FRAC           : 0.30,        // نسبة عمر الصفقة المسموح انتظارها للدخول (30% من time)
     ETE_WAIT_MIN_MS         : 600,         // حدّ أدنى للانتظار (لفريمات 3-4ث)
@@ -5153,11 +5154,14 @@
       const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 5));
       const deadline = Date.now() + maxWait;
       const first = _entryAligned(asset, direction);
-      if (first.ok) {
+      // [V24] الزخم المسطّح لا يدخل فوراً — ينتظر ميلاً حقيقياً (كل صفقات «مسطّح» خسرت)
+      const _flatBlocks = (CFG.ETE_FLAT_WAITS !== false) && first.reason === 'مسطّح';
+      if (first.ok && !_flatBlocks) {
         if (first.sl) addLog('🎯 [ENTRY] دخول فوري — الزخم ' + first.reason + ' يوافق ' + direction, 'signal');
         _executeDualTrade(direction, asset, amount, count); return;
       }
-      addLog('⏳ [ENTRY] انتظار توقيت — الزخم ' + first.reason + ' يعاكس ' + direction + ' | مهلة ' + maxWait + 'ms (' + Math.round(CFG.ETE_WAIT_FRAC*100) + '% من ' + durSec + 'ث)', 'info');
+      const _waitWord = _flatBlocks ? 'بلا زخم (مسطّح)' : (first.reason + ' يعاكس');
+      addLog('⏳ [ENTRY] انتظار توقيت — الزخم ' + _waitWord + ' ' + direction + ' | مهلة ' + maxWait + 'ms (' + Math.round(CFG.ETE_WAIT_FRAC*100) + '% من ' + durSec + 'ث)', 'info');
       _entryTimer = setInterval(() => {
         if (!_running || tradeExec) { clearInterval(_entryTimer); _entryTimer = null; return; }
         const c = _entryAligned(asset, direction);
