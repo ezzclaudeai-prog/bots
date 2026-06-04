@@ -193,13 +193,17 @@
     PSE_USE_SLOPE           : true,        // [V16] استخدم ميل التيك لتحديد الاتجاه عند غياب الشات
     PSE_SLOPE_MS            : 500,         // نافذة حساب الميل (ميلي ثانية)
     PSE_SLOPE_MIN_REL       : 0.000020,   // أدنى عائد نسبي لاعتبار الميل اتجاهاً واضحاً
-    // ─── [V18] التقييم السريع داخل الشمعة — تسريع تكرار التداول ──────────────
-    //   ⛔ [V22-CC] مُعطَّل: كان يقيّم الأنماط على شمعة غير مكتملة → دخول مبكر على
-    //   ارتداد وهمي ثم انعكاس (مصدر معظم الخسائر في سجل AEDCNY). الآن: لا تقييم إلا
-    //   عند إغلاق الشمعة الفعلي (نمط مكتمل ومؤكَّد).
-    FAST_EVAL_ENABLED       : false,       // ⛔ انتظر إغلاق الشمعة — لا تقييم داخلها
-    FAST_EVAL_MS            : 1500,        // أدنى فاصل بين تقييمين سريعين (مللي ثانية)
-    FAST_EVAL_MIN_TICKS     : 4,           // أدنى عدد تيكات في الشمعة المتشكّلة قبل تقييمها
+    // ─── [V22-SMART] التقييم السريع الذكي — سرعة للإشارات القوية فقط ──────────
+    //   يقيّم داخل الشمعة، لكن لا يدخل فوراً إلا إشارة قوية (ثقة ≥ FAST_EVAL_MIN_CONF)
+    //   مع زخم موافق. الإشارات الضعيفة تنتظر إغلاق الشمعة (أمان). يحل «التأخر» دون
+    //   إعادة مشكلة الدخول المبكر على نمط هشّ.
+    FAST_EVAL_ENABLED       : true,        // ✅ تقييم سريع داخل الشمعة (مُقيَّد بالقوة)
+    FAST_EVAL_MIN_CONF      : 75,          // لا دخول سريع داخل الشمعة إلا بثقة ≥ هذه
+    FAST_EVAL_MS            : 1000,        // أدنى فاصل بين تقييمين سريعين (مللي ثانية)
+    FAST_EVAL_MIN_TICKS     : 6,           // أدنى عدد تيكات (شمعة متشكّلة بما يكفي) قبل تقييمها
+    // ─── [V22-CONT] إشارات الاستمرار — تداول مع الاتجاه/الزخم (لا انعكاس فقط) ──
+    CONTINUATION_ENABLED    : true,        // ✅ دخول مع حركة قوية في اتجاه واضح
+    CONTINUATION_MIN_CONF   : 66,          // ثقة إشارة الاستمرار (فوق الأرضية 60%)
     // ─── [V17] محرّك توقيت الدخول (ETE) — لا تدخل إلا حين يوافق الزخم اللحظي ──
     ENTRY_TIMING_ENABLED    : true,        // ✅ تأجيل الدخول حتى يوافق ميل التيك اتجاه الصفقة
     ETE_SLOPE_MS            : 1200,        // نافذة قياس الزخم اللحظي عند الدخول (ميلي ثانية)
@@ -4502,8 +4506,10 @@
       if (!forming) return;
       _lastFastEval = now;
       buf.push(forming);                       // ألحق الشمعة المتشكّلة مؤقتاً
-      try { onCandleClose(a); } catch(_) {} finally { buf.pop(); }   // قيّم ثم أزلها
+      _inFastEval = true;                       // [V22-SMART] وضع التقييم داخل الشمعة
+      try { onCandleClose(a); } catch(_) {} finally { buf.pop(); _inFastEval = false; }
     }
+    let _inFastEval = false;   // [V22-SMART] صحيح أثناء تقييم شمعة غير مكتملة
 
     // ─── كشف إشارة عند إغلاق شمعة ─────────────────────────────────────
     function onCandleClose(asset) {
@@ -4536,6 +4542,10 @@
       // ✅ [V13.4] مرّر تاريخاً كافياً لتفعيل فحص القمة/القاع (كان slice(-5) يُعطّله)
       const signal = _evaluateCandlePattern(candles.slice(-(CFG.THREE_CANDLE_PEAK_WINDOW + 5)));
       if (signal) {
+        // [V22-SMART] داخل الشمعة: لا تدخل إلا الإشارة القوية — الضعيفة تنتظر الإغلاق
+        if (_inFastEval && (signal.confidence || 0) < CFG.FAST_EVAL_MIN_CONF) {
+          return;
+        }
         if (_isPatternFatigued(signal)) {
           addLog('🔄 [PATTERN-FATIGUE] نمط ' + signal.pattern + ' مكرر — حاجز إعادة التسليح نشط', 'info');
           return;
@@ -4899,6 +4909,35 @@
               timestamp: Date.now(),
             };
           }
+        }
+      }
+
+      // نمط 4: [V22-CONT] استمرار مع الاتجاه — دخول مع الزخم (لا انعكاس فقط)
+      //   يُفعَّل حين يكون الاتجاه واضحاً وآخر شمعة تتحرك معه بجسم حقيقي.
+      //   بوابة الاستنفاد (EXHAUST-COOL) تمنعه تلقائياً عند القمم/القيعان المستنفدة.
+      if (CFG.CONTINUATION_ENABLED && candles.length >= 3 && _lastTrendDirection !== 'NEUTRAL') {
+        const c1 = candles[candles.length-1];   // آخر شمعة مغلقة
+        const c0 = candles[candles.length-2];
+        const body = Math.abs(c1.close - c1.open);
+        const range = c1.high - c1.low;
+        const avgBody = (Math.abs(c1.close - c1.open) + Math.abs(c0.close - c0.open)) / 2;
+        const wantBuy  = _lastTrendDirection === 'UP'   && c1.isBullish  && c1.close > c0.close;
+        const wantSell = _lastTrendDirection === 'DOWN' && !c1.isBullish && c1.close < c0.close;
+        if ((wantBuy || wantSell) && range > 0 && body >= range * 0.4 && body >= avgBody * 0.8) {
+          let aligned = 0;
+          for (let k = 1; k <= 3 && candles.length - k >= 0; k++) {
+            const c = candles[candles.length - k];
+            if ((_lastTrendDirection === 'UP' && c.isBullish) || (_lastTrendDirection === 'DOWN' && !c.isBullish)) aligned++;
+          }
+          const conf = Math.max(CFG.CONTINUATION_MIN_CONF, Math.min(85, 60 + aligned * 7));
+          return {
+            direction: wantBuy ? 'BUY' : 'SELL',
+            asset: activeAsset,
+            price: c1.close,
+            confidence: conf,
+            pattern: 'momentum_continuation',
+            timestamp: Date.now(),
+          };
         }
       }
 
