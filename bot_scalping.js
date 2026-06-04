@@ -4573,6 +4573,7 @@
     //   ثقة/استنفاد/ETE) دون تكرارها. القفل والتهدئة يمنعان التكرار في نفس الشمعة.
     let _lastFastEval = 0;
     let _inFastEval = false;   // [V24] صحيح أثناء تقييم شمعة غير مكتملة (للبوابة الذكية)
+    const _patternOffLog = {}; // [V25] خنق تكرار سجل PATTERN-OFF لكل نمط
     function fastEval(asset) {
       if (!CFG.FAST_EVAL_ENABLED || !_running) return;
       const a = normalizeAsset(asset);
@@ -4687,7 +4688,11 @@
       const _adapt = _adaptiveConfGate(signal.pattern);
       const _effThreshold = Math.max(_minConfThreshold + _adapt.bump, CFG.ABSOLUTE_MIN_CONF);  // [V24] أرضية صارمة 60%
       if (_adapt.disabled) {
-        addLog('🚫 [PATTERN-OFF] ' + signal.pattern + ' معطّل مؤقتاً — معدل فوز حي منخفض', 'info');
+        const _k = signal.pattern, _nowOff = Date.now();   // [V25] خنق التكرار: مرة كل 15ث للنمط
+        if (!_patternOffLog[_k] || _nowOff - _patternOffLog[_k] > 15000) {
+          _patternOffLog[_k] = _nowOff;
+          addLog('🚫 [PATTERN-OFF] ' + signal.pattern + ' معطّل مؤقتاً — معدل فوز حي منخفض', 'info');
+        }
         return;
       }
 
@@ -5263,7 +5268,21 @@
       const amt = overrideAmount || tradeAmount;
       const safeAmt = _safeAmount(amt);
       const tradeSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 3));
-      const nOrders = Math.max(1, Math.min(count || 1, 2));   // [V24-2X] حتى صفقتين
+      let nOrders = Math.max(1, Math.min(count || 1, 2));   // [V24-2X] حتى صفقتين
+      // [V25] فحص الرصيد — يمنع NotEnoughFunds: قلّل عدد الأوامر أو تخطَّ إن لم يكفِ
+      const _bal = (typeof currentBalance === 'number' && currentBalance > 0) ? currentBalance
+                 : (typeof accountBalance === 'number' && accountBalance > 0) ? accountBalance : 0;
+      if (_bal > 0) {
+        const affordable = Math.floor(_bal / safeAmt);
+        if (affordable < 1) {
+          addLog('🛑 [BALANCE] رصيد غير كافٍ ($' + _bal.toFixed(2) + ') لمبلغ $' + safeAmt + ' — تخطّي الصفقة', 'error');
+          return;
+        }
+        if (affordable < nOrders) {
+          nOrders = affordable;
+          addLog('⚠️ [BALANCE] الرصيد يكفي ' + nOrders + ' صفقة فقط — تقليص تلقائي', 'info');
+        }
+      }
 
       if (!_payloadCache.prefixCall) _rebuildPayloadCache();
       const prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
