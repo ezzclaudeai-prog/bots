@@ -1429,7 +1429,7 @@
   function processHistoryFast(asset, period, history) {
     const a = normalizeAsset(asset);
     if (!Array.isArray(history) || history.length < 4) return;
-    if (!candlePeriod && period && period>0) { candlePeriod = period; durSource = 'history'; updateHUD(); }
+    if (!candlePeriod && period && period>0) { candlePeriod = Math.max(5, period); durSource = 'history'; updateHUD(); }  // [V22.2] حدّ أدنى 5ث
     const periodSec = candlePeriod || period || 5;
     const groups = {};
     for (const item of history) {
@@ -1568,6 +1568,8 @@
 
   function onPlatformTimeframe(secs, source) {
     if (!Number.isFinite(secs) || secs<1 || secs>3600) return;
+    // [V22.2] لا يوجد فريم أقل من 5ث في المنصة — اقفز للحدّ الأدنى الصالح (يمنع كشف 1ث الشاذ في وضع الخط)
+    if (secs < 5) secs = 5;
     if (secs === candlePeriod) return;
     candlePeriod = secs; durSource = source||'platform'; _lastDetectedPeriod = secs; _lastDetectedCount = CFG.PERIOD_TRUSTED_OVERRIDE;
     _periodLockUntil = Date.now() + 30000;
