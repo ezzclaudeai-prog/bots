@@ -1503,7 +1503,12 @@
   }
 
   function processCloseOrder(data) {
-    if (!data.deals || !data.deals[0]) return;
+    if (!data.deals || !data.deals.length) return;
+    // [V24-2X] قد تُغلق صفقتان معاً في نفس الحدث — عالج كل صفقات البوت
+    if (data.deals.length > 1) {
+      for (const d of data.deals) processCloseOrder({ deals: [d] });
+      return;
+    }
     const deal = data.deals[0];
     if (botOrderIds.size > 0 && !botOrderIds.has(deal.id)) { addLog('📊 صفقة منصة: '+(deal.profit>0?'+':'')+(deal.profit||0).toFixed(2)+'$','info'); return; }
     if (deal.id) botOrderIds.delete(deal.id);
@@ -1595,6 +1600,13 @@
     PERF.mark('tickRecv');
     if (!asset || !price || isNaN(price)) return;
     const a = normalizeAsset(asset), now = Date.now();
+    // ✅ [V24] دقة الملي‑ثانية: استخدم توقيت الخادم (updateStream[1]) للميل اللحظي بدل التوقيت المحلي
+    //   (الـspy كشف: التيك = [الزوج, توقيت‑الخادم.ملي, السعر]). نتحقق أنه ضمن ±5ث من المحلي.
+    let labTs = now;
+    if (typeof serverTs === 'number' && serverTs > 1e9 && serverTs < 1e11) {
+      const sMs = Math.round(serverTs * 1000);
+      if (Math.abs(sMs - now) < 5000) labTs = sMs;
+    }
     // ✅ [V13.5/المسار C] افصل تيكات الأوراكل (الفيد الأسرع) لفلتر التأكيد الكموني
     if (srcRole === 'oracle') {
       try { DualWSSManager.recordOracleTick(a, price); } catch(_) {}
@@ -1608,8 +1620,8 @@
     if (!tickBuffers[a]) tickBuffers[a] = [];
     tickBuffers[a].push(price);
     if (tickBuffers[a].length > 600) tickBuffers[a].shift();
-    try { OracleLab.onTick(a, price, now); } catch(_) {}   // [V16] التقاط خام عالي الدقة
-    try { if (a === activeAsset && typeof DualWSSManager !== 'undefined') DualWSSManager.fastEval(a); } catch(_) {}  // [V18] تقييم سريع داخل الشمعة
+    try { OracleLab.onTick(a, price, labTs); } catch(_) {}   // [V16+V24] التقاط خام بتوقيت الخادم الدقيق
+    try { if (a === activeAsset && typeof DualWSSManager !== 'undefined') { DualWSSManager.fastEval(a); DualWSSManager.tickPulse(a); } } catch(_) {}  // [V18] تقييم سريع + [V24] نبض التيكات
     totalTicks++;
     if (!activeAsset) onActiveAsset(a, 'firstTick');
     const cc = currentCandles[a];
@@ -4511,6 +4523,42 @@
       try { onCandleClose(a); } catch(_) {} finally { buf.pop(); _inFastEval = false; }
     }
 
+    // ═══ [V24] محرك نبض التيكات (TickPulse) — رصد اندفاعات الزخم بالملي‑ثانية ═══
+    //   يعمل على كل تيك (مُهدّأ): يقيس الميل اللحظي على نوافذ ms متعدّدة، وإذا اكتشف
+    //   اندفاعاً قوياً متّسقاً (نافذتان أقصر توافقان) يولّد إشارة زخم تمرّ بكل بوابات
+    //   الأمان عبر _processSignal (أوراكل/اتجاه/أرضية/تتابع). فرص أوسع + أسرع.
+    let _lastPulseCheck = 0;
+    let _pulseCooldownUntil = 0;
+    function tickPulse(asset) {
+      if (!CFG.TICKPULSE_ENABLED || !_running || !autoTrade) return;
+      const a = normalizeAsset(asset);
+      if (a !== activeAsset) return;
+      if (tradeExec || _signalQueue || _entryTimer) return;       // مشغول
+      const now = Date.now();
+      if (now < _cooldownUntil || now < _pulseCooldownUntil) return;
+      if (now - _lastPulseCheck < CFG.TICKPULSE_MS) return;
+      _lastPulseCheck = now;
+      const buf = candleBuffers[a];
+      if (!buf || buf.length < 3) return;                          // نحتاج اتجاهاً
+      const s = OracleLab.microSlope(a, CFG.TICKPULSE_WIN_MS);
+      if (!s || s.ticks < CFG.TICKPULSE_MIN_TICKS || Math.abs(s.rel) < CFG.TICKPULSE_MIN_REL) return;
+      const dir = s.rel > 0 ? 'BUY' : 'SELL';
+      // اتّساق: نافذتان أقصر توافقان الاتجاه (الزخم يبني لا يرتد لحظياً)
+      const s2 = OracleLab.microSlope(a, Math.round(CFG.TICKPULSE_WIN_MS / 2));
+      const sShort = OracleLab.microSlope(a, 300);
+      const consistent = s2 && sShort &&
+        ((dir === 'BUY'  && s2.rel >= 0 && sShort.rel >= 0) ||
+         (dir === 'SELL' && s2.rel <= 0 && sShort.rel <= 0));
+      if (!consistent) return;
+      const strength = Math.abs(s.rel) / CFG.TICKPULSE_MIN_REL;    // ≥1
+      const conf = Math.max(CFG.TICKPULSE_BASE_CONF, Math.min(90, Math.round(CFG.TICKPULSE_BASE_CONF + (strength - 1) * 8)));
+      const tb = tickBuffers[a];
+      const price = (tb && tb.length) ? tb[tb.length - 1] : 0;
+      addLog('⚡ [TICKPULSE] اندفاع ' + dir + ' | ميل ' + (s.rel * 1e6).toFixed(1) + 'e-6 (' + s.ticks + ' تيك/' + CFG.TICKPULSE_WIN_MS + 'ms) | ثقة ' + conf + '%', 'signal');
+      _pulseCooldownUntil = now + CFG.TICKPULSE_COOLDOWN_MS;
+      _processSignal({ direction: dir, asset: a, price, confidence: conf, pattern: 'tick_pulse', timestamp: now });
+    }
+
     // ─── كشف إشارة عند إغلاق شمعة ─────────────────────────────────────
     function onCandleClose(asset) {
       if (!_running) return;
@@ -4911,6 +4959,29 @@
         }
       }
 
+      // نمط 4: [V24-CONT] استمرار مع الاتجاه — دخول مع الزخم (لا انعكاس فقط)
+      //   بوابة الاستنفاد (EXHAUST-COOL) تمنعه تلقائياً عند القمم/القيعان المستنفدة.
+      if (CFG.CONTINUATION_ENABLED && candles.length >= 3 && _lastTrendDirection !== 'NEUTRAL') {
+        const c1 = candles[candles.length-1], c0 = candles[candles.length-2];
+        const body = Math.abs(c1.close - c1.open), range = c1.high - c1.low;
+        const avgBody = (Math.abs(c1.close - c1.open) + Math.abs(c0.close - c0.open)) / 2;
+        const wantBuy  = _lastTrendDirection === 'UP'   && c1.isBullish  && c1.close > c0.close;
+        const wantSell = _lastTrendDirection === 'DOWN' && !c1.isBullish && c1.close < c0.close;
+        if ((wantBuy || wantSell) && range > 0 && body >= range * 0.4 && body >= avgBody * 0.8) {
+          let aligned = 0;
+          for (let k = 1; k <= 3 && candles.length - k >= 0; k++) {
+            const c = candles[candles.length - k];
+            if ((_lastTrendDirection === 'UP' && c.isBullish) || (_lastTrendDirection === 'DOWN' && !c.isBullish)) aligned++;
+          }
+          const conf = Math.max(CFG.CONTINUATION_MIN_CONF, Math.min(85, 60 + aligned * 7));
+          return {
+            direction: wantBuy ? 'BUY' : 'SELL',
+            asset: activeAsset, price: c1.close,
+            confidence: conf, pattern: 'momentum_continuation', timestamp: Date.now(),
+          };
+        }
+      }
+
       return null;
     }
 
@@ -5023,35 +5094,30 @@
       _lastExecutedPattern = signal.pattern + ':' + signal.asset;
       _lastExecutedPatternTs = _now;
 
-      // [V22] الصفقات المزدوجة — ضاعف المبلغ حسب قوة الإشارة (70%→×2، 85%→×3، 94%→×4)
-      let _execAmount = tradeAmount;
-      if (CFG.DOUBLE_ON_STRONG) {
-        const _c = signal.confidence || 0;
-        const _mult = _c >= CFG.IMDB_TIER_QUAD ? 4 : _c >= CFG.IMDB_TIER_TRIPLE ? 3 : _c >= CFG.IMDB_TIER_DOUBLE ? 2 : 1;
-        if (_mult > 1) {
-          _execAmount = _safeAmount(tradeAmount * Math.min(_mult, CFG.DOUBLE_MAX_MULT));
-          _lastTradeWasDouble = true;
-          STATS.doubles = (STATS.doubles || 0) + 1;
-          addLog('🔥 [DOUBLE] إشارة قوية ' + _c + '% → ×' + _mult + ' = $' + _execAmount, 'signal');
-        }
+      // [V24-2X] صفقتان حقيقيتان عند الثقة العالية (أمران فعليان — أصدق من مضاعفة المبلغ التجميلية)
+      const _execAmount = tradeAmount;
+      let _tradeCount = 1;
+      if (CFG.TWO_TRADES_ENABLED && (signal.confidence || 0) >= CFG.TWO_TRADES_MIN_CONF) {
+        _tradeCount = 2;
+        _lastTradeWasDouble = true;
+        STATS.doubles = (STATS.doubles || 0) + 1;
+        addLog('🔥 [2X] إشارة قوية ' + signal.confidence + '% → صفقتان × $' + _execAmount, 'signal');
       }
 
-      // حساب التأخير الاصطناعي + [V22] إزاحة التوقيت اليدوية (زر ⚡ توقيت التنفيذ)
-      //   _timingOffset سالب = دخول أبكر | موجب = أبطأ. الآن موصول فعلياً.
+      // [V24-FAST] التأخير الاصطناعي أُلغي — تبقى إزاحة التوقيت اليدوية فقط (زر ⚡)
       const synthDelay = _getSyntheticDelay();
-      const jitter = Math.round((Math.random() - 0.5) * 2 * CFG.DUAL_WSS_JITTER_MS);
+      const jitter = CFG.DUAL_WSS_JITTER_MS ? Math.round((Math.random() - 0.5) * 2 * CFG.DUAL_WSS_JITTER_MS) : 0;
       const totalDelay = Math.max(0, synthDelay + jitter + _timingOffset);
 
       if (totalDelay > 0) {
-        addLog('🔮 [DELAY] تأخير اصطناعي: ' + totalDelay + 'مللي ثانية (فجوة: ' +
-               Math.abs(_latencyGap).toFixed(0) + 'ms)', 'info');
+        addLog('🔮 [DELAY] تأخير: ' + totalDelay + 'مللي ثانية', 'info');
         if (_queueTimer) clearTimeout(_queueTimer);
         _queueTimer = setTimeout(() => {
           _queueTimer = null;
-          _timedExecute(signal.direction, signal.asset, _execAmount);
+          _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount);
         }, totalDelay);
       } else {
-        _timedExecute(signal.direction, signal.asset, _execAmount);
+        _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount);
       }
     }
 
@@ -5080,8 +5146,8 @@
       const ms = Math.round(durSec * 1000 * CFG.ETE_WAIT_FRAC);
       return Math.max(CFG.ETE_WAIT_MIN_MS, Math.min(CFG.ETE_WAIT_MAX_MS, ms));
     }
-    function _timedExecute(direction, asset, amount) {
-      if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount); return; }
+    function _timedExecute(direction, asset, amount, count) {
+      if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount, count); return; }
       if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
       const maxWait = _eteMaxWait();
       const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 5));
@@ -5089,7 +5155,7 @@
       const first = _entryAligned(asset, direction);
       if (first.ok) {
         if (first.sl) addLog('🎯 [ENTRY] دخول فوري — الزخم ' + first.reason + ' يوافق ' + direction, 'signal');
-        _executeDualTrade(direction, asset, amount); return;
+        _executeDualTrade(direction, asset, amount, count); return;
       }
       addLog('⏳ [ENTRY] انتظار توقيت — الزخم ' + first.reason + ' يعاكس ' + direction + ' | مهلة ' + maxWait + 'ms (' + Math.round(CFG.ETE_WAIT_FRAC*100) + '% من ' + durSec + 'ث)', 'info');
       _entryTimer = setInterval(() => {
@@ -5098,12 +5164,12 @@
         if (c.ok && c.reason !== 'مسطّح') {
           clearInterval(_entryTimer); _entryTimer = null;
           addLog('🎯 [ENTRY] الزخم توافق (' + c.reason + ') — دخول ' + direction, 'signal');
-          _executeDualTrade(direction, asset, amount);
+          _executeDualTrade(direction, asset, amount, count);
         } else if (Date.now() >= deadline) {
           clearInterval(_entryTimer); _entryTimer = null;
           if (CFG.ETE_ON_TIMEOUT === 'enter') {
             addLog('🎯 [ENTRY] انتهت المهلة — دخول رغم عدم التوافق ' + direction, 'info');
-            _executeDualTrade(direction, asset, amount);
+            _executeDualTrade(direction, asset, amount, count);
           } else {
             addLog('🚫 [ENTRY] انتهت المهلة دون توافق — إلغاء ' + direction + ' (تجنّب توقيت سيّئ)', 'info');
           }
@@ -5111,7 +5177,7 @@
       }, CFG.ETE_POLL_MS);
     }
 
-    function _executeDualTrade(direction, asset, overrideAmount) {
+    function _executeDualTrade(direction, asset, overrideAmount, count) {
       if (!autoTrade) return;
       if (tradeExec) return;
       if (!tradeWSOrig || !tradeWS || tradeWS.readyState !== 1) {
@@ -5124,15 +5190,16 @@
       const amt = overrideAmount || tradeAmount;
       const safeAmt = _safeAmount(amt);
       const tradeSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 3));
-      const rid = _nextReqId();
+      const nOrders = Math.max(1, Math.min(count || 1, 2));   // [V24-2X] حتى صفقتين
 
       if (!_payloadCache.prefixCall) _rebuildPayloadCache();
       const prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
       const suffix = action === 'call' ? _payloadCache.suffixCall : _payloadCache.suffixPut;
-      const msg = prefix + rid + suffix;
 
       try {
-        tradeWSOrig(msg);
+        for (let k = 0; k < nOrders; k++) {
+          tradeWSOrig(prefix + _nextReqId() + suffix);   // [V24-2X] أمر فعلي لكل صفقة
+        }
         tradeExec = true;
         lastTradeMs = Date.now();
         // ✅ تحرير تلقائي لـ tradeExec بعد مدة الصفقة + 5 ثواني أمان
@@ -5156,7 +5223,7 @@
         _lastTradePrice = _lastSignal ? _lastSignal.price : 0;
         // ✅ مسح الإشارة المعلقة بعد التنفيذ الناجح
         _pendingRetrySignal = null;
-        addLog('⚡ [DUAL-EXEC] ' + direction + ' | ' + (asset || activeAsset) + ' | $' + safeAmt + ' | ' + tradeSec + 'ث', 'signal');
+        addLog('⚡ [DUAL-EXEC] ' + direction + ' | ' + (asset || activeAsset) + ' | $' + safeAmt + (nOrders > 1 ? ' ×' + nOrders : '') + ' | ' + tradeSec + 'ث', 'signal');
         updateTradeBtn();
       } catch(err) {
         addLog('❌ [DUAL-WSS] فشل إرسال الأمر: ' + err.message, 'error');
@@ -5279,6 +5346,7 @@
       },
       onCandleClose,
       fastEval,
+      tickPulse,
       onPlatformSignal,
       getLatencyGap:     () => _latencyGap,
       getLastSignal:     () => _lastSignal,
