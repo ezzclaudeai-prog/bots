@@ -88,11 +88,10 @@
     SEE_MAX_MS               : 5000,
     MINI_BACKTEST_ENABLED    : false,
     IMDB_TIER_DOUBLE         : 70,
-    // [V22] مضاعفة المبلغ عند الإشارة القوية (الصفقات المزدوجة)
-    DOUBLE_ON_STRONG         : true,       // ✅ ضاعف المبلغ حسب قوة الإشارة
-    IMDB_TIER_TRIPLE         : 85,         // ثقة ≥85% → ×3
-    IMDB_TIER_QUAD           : 94,         // ثقة ≥94% → ×4
-    DOUBLE_MAX_MULT          : 4,          // أقصى مضاعفة
+    // [V22] الصفقات المزدوجة — ×2 عند إشارة قوية مؤكّدة بالأوراكل فقط (آمن)
+    DOUBLE_ON_STRONG         : true,       // ✅ ضاعف المبلغ عند إشارة قوية مؤكّدة
+    DOUBLE_MULT              : 2,          // مضاعف المبلغ (2 = مزدوجة)
+    DOUBLE_MIN_CONF          : 80,         // أدنى ثقة للمضاعفة
     SIGNAL_WATCHER_MS        : 25,
     SIGNAL_WATCHER_EXPIRY_MS : 1500,
     MAX_LOSS_STREAK          : 3,
@@ -165,6 +164,7 @@
     TREND_FILTER_MODE       : 'soft',      // ✅ [V13.6] 'soft'=خصم ثقة للمعاكس (يبقى سريعاً) | 'hard'=حظر تام
     TREND_SOFT_PENALTY      : 12,          // ✅ [V13.6] خصم الثقة للإشارة المعاكسة في الوضع الناعم
     COUNTERTREND_NEEDS_ORACLE: false,      // ✅ [V14.6] اختياري ومُطفأ: بيانات السجل أثبتت أن المعاكس 75% رابح — لا تحجبه
+    NO_ORACLE_MIN_CONF       : 72,         // [V21] بلا دعم أوراكل → اشترط ثقة نمط ≥ هذه (0=معطّل). يحمي من تذبذب السوق
     COUNTERTREND_MIN_CONF    : 90,         // عتبة الثقة لو فعّلته يدوياً
     EXHAUSTION_COOLDOWN_MS  : 4000,        // ✅ [V13.6] بعد الاستنفاد امنع اتجاه الاستمرار 4ث (كان 9 — أسرع)
     MIN_TRADE_SEC           : 3,           // ✅ [V14.2] حد أدنى لمدة الصفقة — المنصة ترفض <3ث (IncorrectExpTime)
@@ -4579,6 +4579,13 @@
           addLog('🔮 [ORACLE-OK] ' + signal.direction + ' مؤكَّد — ' + _orc.reason + (_orc.strength ? ' قوة:' + _orc.strength : '') + ' | قوة المنصة الآن: ' + (DualWSSManager.platformStrength ? DualWSSManager.platformStrength(signal.asset) : '?'), 'info');
         }
 
+        // ✅ [V21] أرضية ثقة للصفقات بلا دعم أوراكل (chat=— و plat<3) — ملف الخسارة
+        //   في السوق المتذبذب (بيانات عدة جلسات). تشترط ثقة نمط أعلى لها.
+        if (CFG.NO_ORACLE_MIN_CONF > 0 && !_oracleConfirmed && signal.confidence < CFG.NO_ORACLE_MIN_CONF) {
+          addLog('🛡️ [NO-ORACLE] ' + signal.direction + ' مرفوض — بلا دعم أوراكل وثقة ' + signal.confidence + '% < ' + CFG.NO_ORACLE_MIN_CONF + '%', 'info');
+          return;
+        }
+
         // ✅ [V14.6] قاعدة مدعومة بالبيانات: المعاكس للاتجاه + بلا تأكيد منصة = ملف الخسارة.
         //   (كل خسائر سجلك كانت كذلك؛ وكل صفقة أكّدها الأوراكل ربحت). نشترط ثقة عالية هنا.
         if (CFG.COUNTERTREND_NEEDS_ORACLE && _counterTrend && !_oracleConfirmed &&
@@ -5001,16 +5008,18 @@
       _lastExecutedPattern = signal.pattern + ':' + signal.asset;
       _lastExecutedPatternTs = _now;
 
-      // [V22] الصفقات المزدوجة — ضاعف المبلغ حسب قوة الإشارة (70%→×2، 85%→×3، 94%→×4)
+      // [V22] الصفقات المزدوجة — ×2 فقط عند إشارة قوية **مؤكّدة بالأوراكل** (آمن:
+      //   يضاعف ملف الربح لا التذبذب). شرط: (شات يؤكّد أو قوة منصة≥3) + ثقة عالية.
       let _execAmount = tradeAmount;
       if (CFG.DOUBLE_ON_STRONG) {
-        const _c = signal.confidence || 0;
-        const _mult = _c >= CFG.IMDB_TIER_QUAD ? 4 : _c >= CFG.IMDB_TIER_TRIPLE ? 3 : _c >= CFG.IMDB_TIER_DOUBLE ? 2 : 1;
-        if (_mult > 1) {
-          _execAmount = _safeAmount(tradeAmount * Math.min(_mult, CFG.DOUBLE_MAX_MULT));
+        const _plat = platformStrength(signal.asset);
+        const _cs = _chatSig[normalizeAsset(signal.asset)];
+        const _oracleOk = (_cs && _cs.dir === signal.direction) || _plat >= CFG.ORACLE_MIN_STRENGTH;
+        if (_oracleOk && (signal.confidence || 0) >= CFG.DOUBLE_MIN_CONF) {
+          _execAmount = _safeAmount(tradeAmount * CFG.DOUBLE_MULT);
           _lastTradeWasDouble = true;
           STATS.doubles = (STATS.doubles || 0) + 1;
-          addLog('🔥 [DOUBLE] إشارة قوية ' + _c + '% → ×' + _mult + ' = $' + _execAmount, 'signal');
+          addLog('🔥 [DOUBLE] إشارة قوية مؤكّدة بالأوراكل (' + (_cs && _cs.dir === signal.direction ? 'شات' : 'منصة:' + _plat) + ') → ×' + CFG.DOUBLE_MULT + ' = $' + _execAmount, 'signal');
         }
       }
 
@@ -5105,8 +5114,15 @@
       const rid = _nextReqId();
 
       if (!_payloadCache.prefixCall) _rebuildPayloadCache();
-      const prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
-      const suffix = action === 'call' ? _payloadCache.suffixCall : _payloadCache.suffixPut;
+      let prefix, suffix;
+      if (overrideAmount && Math.abs(safeAmt - tradeAmount) > 1e-9) {
+        // [V22] payload مخصّص بالمبلغ الفعلي — يصلح إرسال الصفقات المزدوجة فعلياً
+        prefix = '42["openOrder",{"asset":"'+(asset||activeAsset||'')+'","amount":'+safeAmt+',"action":"'+action+'","isDemo":'+isDemo+',"requestId":';
+        suffix = ',"optionType":100,"time":'+tradeSec+'}]';
+      } else {
+        prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
+        suffix = action === 'call' ? _payloadCache.suffixCall : _payloadCache.suffixPut;
+      }
       const msg = prefix + rid + suffix;
 
       try {
