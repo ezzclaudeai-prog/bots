@@ -93,9 +93,6 @@
     IMDB_TIER_TRIPLE         : 85,         // ثقة ≥85% → ×3
     IMDB_TIER_QUAD           : 94,         // ثقة ≥94% → ×4
     DOUBLE_MAX_MULT          : 4,          // أقصى مضاعفة
-    // [V22-2X] صفقتين حقيقيتين عند التأكد (يرسل أمرين فعليين — المضاعفة القديمة كانت تجميلية فقط)
-    TWO_TRADES_ENABLED       : true,       // ✅ أرسِل صفقتين عند الثقة العالية
-    TWO_TRADES_MIN_CONF      : 70,         // ثقة ≥ هذه → صفقتان بدل واحدة
     SIGNAL_WATCHER_MS        : 25,
     SIGNAL_WATCHER_EXPIRY_MS : 1500,
     MAX_LOSS_STREAK          : 3,
@@ -123,15 +120,14 @@
     // ─── Dual-WSS Latency Arbitrage ──────────────────────────────────
     DUAL_WSS_ENABLED        : true,
     DUAL_WSS_MIN_GAP_MS     : 150,        // الحد الأدنى لفجوة الكمون (مللي ثانية)
-    DUAL_WSS_SYNTHETIC_DELAY : 0,         // [V22-FAST] أُلغي التأخير الاصطناعي — دخول فوري
+    DUAL_WSS_SYNTHETIC_DELAY : 0,         // [V24-FAST] أُلغي التأخير الاصطناعي — دخول فوري
     DUAL_WSS_PING_INTERVAL  : 5000,       // فاصل قياس الكمون (مللي ثانية)
     DUAL_WSS_RECONNECT_DELAY: 3000,       // تأخير إعادة الاتصال عند الفشل
     DUAL_WSS_MAX_SIGNAL_AGE : 2000,       // أقصى عمر للإشارة (مللي ثانية) قبل الرفض
-    DUAL_WSS_JITTER_MS      : 0,          // [V22-FAST] بلا اهتزاز — دخول فوري
+    DUAL_WSS_JITTER_MS      : 0,          // [V24-FAST] بلا اهتزاز — دخول فوري
 
     // ─── حماية متقدمة ──────────────────────────────────────────────
     MIN_CONFIDENCE_THRESHOLD: 75,          // حد الثقة الأدنى — يتحكم به سلايدر الواجهة
-    ABSOLUTE_MIN_CONF       : 60,          // [V22-FLOOR] أرضية صارمة — لا صفقة تحت 60% مهما كان السلايدر (تحذف صفقات 50% الهشّة)
     GHOST_TRADE_ENABLED     : true,        // صفقة وهمية بعد أول خسارة
     GHOST_TRIGGER_STREAK    : 2,           // ✅ [V13.6] فعّل Ghost فقط بعد N خسائر متتالية (2 بدل 1 — أسرع)
     GHOST_MAX_CONSECUTIVE   : 1,           // ✅ [V13.6] عدد الصفقات الوهمية قبل العودة للحقيقي (1 بدل 2 — أسرع)
@@ -151,7 +147,7 @@
     MAX_CONSEC_SAME_DIR     : 2,          // حد الصفقات المتتالية في نفس الاتجاه (2 = أقصى صفقتين BUY أو SELL متتاليتين)
     CONSEC_CONF_PENALTY     : 20,         // خصم من الثقة لكل صفقة متتالية في نفس الاتجاه (20% → 80% تصبح 60%)
     PATTERN_REARM_ENABLED   : true,       // حاجز إعادة تسليح النمط — نفس النمط لا يكرر خلال فترة الحماية
-    PATTERN_REARM_MIN_MS    : 5000,       // [V22-FAST] 5ث (كان 10) — إعادة تسليح أسرع للنمط
+    PATTERN_REARM_MIN_MS    : 5000,       // [V24-FAST] 5ث (كان 10) — إعادة تسليح أسرع
     MAX_TRADES_PER_WINDOW   : 12,         // ✅ [V14.5] سقف الصفقات/دقيقة (12 بدل 4 — تسريع السكالبينغ)
     TRADE_WINDOW_MS         : 60000,      // نافذة العد: 60 ثانية
 
@@ -193,17 +189,26 @@
     PSE_USE_SLOPE           : true,        // [V16] استخدم ميل التيك لتحديد الاتجاه عند غياب الشات
     PSE_SLOPE_MS            : 500,         // نافذة حساب الميل (ميلي ثانية)
     PSE_SLOPE_MIN_REL       : 0.000020,   // أدنى عائد نسبي لاعتبار الميل اتجاهاً واضحاً
-    // ─── [V22-SMART] التقييم السريع الذكي — سرعة للإشارات القوية فقط ──────────
-    //   يقيّم داخل الشمعة، لكن لا يدخل فوراً إلا إشارة قوية (ثقة ≥ FAST_EVAL_MIN_CONF)
-    //   مع زخم موافق. الإشارات الضعيفة تنتظر إغلاق الشمعة (أمان). يحل «التأخر» دون
-    //   إعادة مشكلة الدخول المبكر على نمط هشّ.
-    FAST_EVAL_ENABLED       : true,        // ✅ تقييم سريع داخل الشمعة (مُقيَّد بالقوة)
-    FAST_EVAL_MIN_CONF      : 75,          // لا دخول سريع داخل الشمعة إلا بثقة ≥ هذه
-    FAST_EVAL_MS            : 1000,        // أدنى فاصل بين تقييمين سريعين (مللي ثانية)
-    FAST_EVAL_MIN_TICKS     : 6,           // أدنى عدد تيكات (شمعة متشكّلة بما يكفي) قبل تقييمها
-    // ─── [V22-CONT] إشارات الاستمرار — تداول مع الاتجاه/الزخم (لا انعكاس فقط) ──
+    // ─── [V24] التقييم السريع الذكي داخل الشمعة ──────────────────────────────
+    FAST_EVAL_ENABLED       : true,        // ✅ قيّم الأنماط داخل الشمعة
+    FAST_EVAL_MIN_CONF      : 75,          // [V24] لا دخول سريع داخل الشمعة إلا بثقة ≥ هذه (الضعيف ينتظر الإغلاق)
+    FAST_EVAL_MS            : 700,         // [V24] فحص أكثر تواتراً (كان 1500) — رصد أسرع
+    FAST_EVAL_MIN_TICKS     : 5,           // أدنى عدد تيكات في الشمعة المتشكّلة قبل تقييمها
+    // ─── [V24] إشارات الاستمرار — تداول مع الاتجاه/الزخم (لا انعكاس فقط) ──────
     CONTINUATION_ENABLED    : true,        // ✅ دخول مع حركة قوية في اتجاه واضح
-    CONTINUATION_MIN_CONF   : 66,          // ثقة إشارة الاستمرار (فوق الأرضية 60%)
+    CONTINUATION_MIN_CONF   : 66,          // ثقة إشارة الاستمرار
+    // ─── [V24] محرك نبض التيكات (TickPulse) — رصد الفرص بالملي‑ثانية ──────────
+    TICKPULSE_ENABLED       : true,        // ✅ يكتشف اندفاعات الزخم لحظياً من التيكات الخام
+    TICKPULSE_MS            : 250,         // أدنى فاصل بين فحوص النبض (مللي ثانية)
+    TICKPULSE_WIN_MS        : 900,         // نافذة قياس الاندفاع (مللي ثانية)
+    TICKPULSE_MIN_TICKS     : 4,           // أدنى عدد تيكات في النافذة
+    TICKPULSE_MIN_REL       : 0.000060,   // أدنى عائد نسبي ليُعدّ اندفاعاً قوياً
+    TICKPULSE_COOLDOWN_MS   : 3000,        // تهدئة بين نبضتين
+    TICKPULSE_BASE_CONF     : 70,          // ثقة أساس النبض (تتدرّج مع القوة)
+    // ─── [V24] أرضية ثقة صارمة + صفقتان حقيقيتان ──────────────────────────────
+    ABSOLUTE_MIN_CONF       : 60,          // [V24] لا صفقة تحت 60% مهما كان السلايدر
+    TWO_TRADES_ENABLED      : true,        // ✅ صفقتان حقيقيتان (أمران فعليان) عند التأكد
+    TWO_TRADES_MIN_CONF     : 70,          // ثقة ≥ هذه → صفقتان
     // ─── [V17] محرّك توقيت الدخول (ETE) — لا تدخل إلا حين يوافق الزخم اللحظي ──
     ENTRY_TIMING_ENABLED    : true,        // ✅ تأجيل الدخول حتى يوافق ميل التيك اتجاه الصفقة
     ETE_SLOPE_MS            : 1200,        // نافذة قياس الزخم اللحظي عند الدخول (ميلي ثانية)
@@ -1498,12 +1503,7 @@
   }
 
   function processCloseOrder(data) {
-    if (!data.deals || !data.deals.length) return;
-    // [V22-2X] قد تُغلق صفقتان معاً في نفس الحدث — عالج كل صفقات البوت
-    if (data.deals.length > 1) {
-      for (const d of data.deals) processCloseOrder({ deals: [d] });
-      return;
-    }
+    if (!data.deals || !data.deals[0]) return;
     const deal = data.deals[0];
     if (botOrderIds.size > 0 && !botOrderIds.has(deal.id)) { addLog('📊 صفقة منصة: '+(deal.profit>0?'+':'')+(deal.profit||0).toFixed(2)+'$','info'); return; }
     if (deal.id) botOrderIds.delete(deal.id);
@@ -2122,7 +2122,7 @@
       </div>
       <div class="cb-conf-slider-row" style="display:flex;align-items:center;gap:6px;padding:4px 10px;">
         <span style="font-size:10px;color:#7c8d9b;min-width:58px;">🎯 ثقة ≥</span>
-        <input type="range" id="cbConfSlider" min="60" max="95" value="75" style="flex:1;accent-color:#00d264;height:4px;">
+        <input type="range" id="cbConfSlider" min="50" max="95" value="75" style="flex:1;accent-color:#00d264;height:4px;">
         <span style="font-size:11px;font-weight:700;color:#00d264;min-width:28px;text-align:right;" id="cbConfSliderVal">75%</span>
       </div>
       <div class="cb-timing-row">
@@ -4490,6 +4490,7 @@
     //   يستدعي onCandleClose نفسه → يعيد استخدام كل بوابات الأمان (أوراكل/اتجاه/
     //   ثقة/استنفاد/ETE) دون تكرارها. القفل والتهدئة يمنعان التكرار في نفس الشمعة.
     let _lastFastEval = 0;
+    let _inFastEval = false;   // [V24] صحيح أثناء تقييم شمعة غير مكتملة (للبوابة الذكية)
     function fastEval(asset) {
       if (!CFG.FAST_EVAL_ENABLED || !_running) return;
       const a = normalizeAsset(asset);
@@ -4506,10 +4507,9 @@
       if (!forming) return;
       _lastFastEval = now;
       buf.push(forming);                       // ألحق الشمعة المتشكّلة مؤقتاً
-      _inFastEval = true;                       // [V22-SMART] وضع التقييم داخل الشمعة
+      _inFastEval = true;                       // [V24] وضع التقييم داخل الشمعة (للبوابة الذكية)
       try { onCandleClose(a); } catch(_) {} finally { buf.pop(); _inFastEval = false; }
     }
-    let _inFastEval = false;   // [V22-SMART] صحيح أثناء تقييم شمعة غير مكتملة
 
     // ─── كشف إشارة عند إغلاق شمعة ─────────────────────────────────────
     function onCandleClose(asset) {
@@ -4541,83 +4541,83 @@
       // ═══ فحص تكرار النمط — منع نفس النمط من التكرار بسرعة ═══
       // ✅ [V13.4] مرّر تاريخاً كافياً لتفعيل فحص القمة/القاع (كان slice(-5) يُعطّله)
       const signal = _evaluateCandlePattern(candles.slice(-(CFG.THREE_CANDLE_PEAK_WINDOW + 5)));
-      if (signal) {
-        // [V22-SMART] داخل الشمعة: لا تدخل إلا الإشارة القوية — الضعيفة تنتظر الإغلاق
-        if (_inFastEval && (signal.confidence || 0) < CFG.FAST_EVAL_MIN_CONF) {
-          return;
-        }
-        if (_isPatternFatigued(signal)) {
-          addLog('🔄 [PATTERN-FATIGUE] نمط ' + signal.pattern + ' مكرر — حاجز إعادة التسليح نشط', 'info');
-          return;
-        }
+      if (signal) _processSignal(signal, { fromFastEval: _inFastEval });
+    }
 
-        // ✅ [V13.4] بوابة الاستنفاد الاتجاهي — امنع اتجاه الاستمرار فقط بعد رالي مستنفد
-        //   (يمنع شراء القمة / بيع القاع مثل الخسارة #3) دون منع صفقات الارتداد الرابحة
-        if (Date.now() < _exhaustUntil) {
-          const contDir = _exhaustDir === 'UP' ? 'BUY' : (_exhaustDir === 'DOWN' ? 'SELL' : null);
-          if (contDir && signal.direction === contDir) {
-            addLog('🛑 [EXHAUST-COOL] ' + signal.direction + ' ممنوع — استمرار بعد استنفاد ' + _exhaustDir, 'info');
-            return;
-          }
-        }
+    // ═══ [V24] معالجة موحّدة للإشارة عبر كل بوابات الأمان ═══
+    //   تُستخدم من أنماط الشموع ومن محرك نبض التيكات — مصدر واحد للحقيقة.
+    function _processSignal(signal, opts) {
+      opts = opts || {};
+      // [V24] داخل الشمعة: لا تدخل إلا الإشارة القوية — الضعيفة تنتظر إغلاق الشمعة (أمان)
+      if (opts.fromFastEval && (signal.confidence || 0) < CFG.FAST_EVAL_MIN_CONF) return;
 
-        // ✅ [V13.4] ثقة تكيفية — ارفع عتبة القبول للأنماط الخاسرة حياً، وعطّل الضعيف جداً
-        const _adapt = _adaptiveConfGate(signal.pattern);
-        const _effThreshold = Math.max(_minConfThreshold + _adapt.bump, CFG.ABSOLUTE_MIN_CONF);  // [V22-FLOOR] أرضية 60%
-        if (_adapt.disabled) {
-          addLog('🚫 [PATTERN-OFF] ' + signal.pattern + ' معطّل مؤقتاً — معدل فوز حي منخفض', 'info');
-          return;
-        }
-
-        // ✅ [V13.6] فلتر الاتجاه — وضعان: 'hard'=حظر تام | 'soft'=خصم ثقة (يبقى السكالبينغ سريعاً)
-        let _effConf = signal.confidence;
-        let _counterTrend = false;
-        if (!_trendAllows(signal.direction)) {
-          if (CFG.TREND_FILTER_MODE === 'hard') {
-            addLog('🚫 [TREND-BLOCK] ' + signal.direction + ' ممنوع — الاتجاه: ' + _lastTrendDirection, 'info');
-            return;
-          }
-          _counterTrend = true;
-          // soft: اخصم من الثقة فقط — الإشارة المعاكسة القوية تمر، الضعيفة تُرفض بالعتبة
-          _effConf -= CFG.TREND_SOFT_PENALTY;
-          addLog('⚠️ [TREND-SOFT] ' + signal.direction + ' عكس الاتجاه ' + _lastTrendDirection + ' — خصم ' + CFG.TREND_SOFT_PENALTY + '% (ثقة: ' + _effConf + '%)', 'info');
-        }
-
-        // فلتر ثقة أدنى — يتحكم به سلايدر الواجهة (+ تعديل تكيفي + خصم الاتجاه الناعم)
-        if (_effConf < _effThreshold) {
-          addLog('🔮 [SIGNAL-DISCARD] ' + signal.direction + ' | ثقة: ' + _effConf + '% < ' + _effThreshold + '% | نمط: ' + signal.pattern, 'info');
-          return;
-        }
-
-        // ✅ [V14] فلتر تأكيد الأوراكل — إشارات المنصة الحقيقية (شات اتجاه + قوة رقمية)
-        const _orc = oracleAgrees(signal.direction, signal.asset);
-        if (!_orc.agree) {
-          addLog('🔮 [ORACLE-VETO] ' + signal.direction + ' مرفوض — إشارة المنصة ' + _orc.oracleDir + ' (' + _orc.reason + ')', 'info');
-          return;
-        }
-        // ✅ [V14] تشخيص تغطية الأوراكل — لقياس كم مرة توجد إشارة منصة فعلية (لقرار المسار D)
-        const _oracleConfirmed = (_orc.reason === 'chat-confirm' || _orc.reason === 'plat-strength');
-        if (_oracleConfirmed) {
-          addLog('🔮 [ORACLE-OK] ' + signal.direction + ' مؤكَّد — ' + _orc.reason + (_orc.strength ? ' قوة:' + _orc.strength : '') + ' | قوة المنصة الآن: ' + (DualWSSManager.platformStrength ? DualWSSManager.platformStrength(signal.asset) : '?'), 'info');
-        }
-
-        // ✅ [V14.6] قاعدة مدعومة بالبيانات: المعاكس للاتجاه + بلا تأكيد منصة = ملف الخسارة.
-        //   (كل خسائر سجلك كانت كذلك؛ وكل صفقة أكّدها الأوراكل ربحت). نشترط ثقة عالية هنا.
-        if (CFG.COUNTERTREND_NEEDS_ORACLE && _counterTrend && !_oracleConfirmed &&
-            signal.confidence < CFG.COUNTERTREND_MIN_CONF) {
-          addLog('🛡️ [CT-GUARD] ' + signal.direction + ' مرفوض — معاكس للاتجاه بلا تأكيد منصة وثقة ' + signal.confidence + '% < ' + CFG.COUNTERTREND_MIN_CONF + '%', 'info');
-          return;
-        }
-
-        // ═══ فحص الصفقات المتتالية في نفس الاتجاه ═══
-        if (signal.direction === _lastTradeDirection && _consecutiveSameDir >= CFG.MAX_CONSEC_SAME_DIR) {
-          addLog('🚫 [CONSEC-LIMIT] ' + signal.direction + ' ممنوع — ' + _consecutiveSameDir + ' صفقات متتالية في نفس الاتجاه (حد: ' + CFG.MAX_CONSEC_SAME_DIR + ')', 'info');
-          return;
-        }
-
-        _signalCount++;
-        _enqueueSignal(signal);
+      if (_isPatternFatigued(signal)) {
+        addLog('🔄 [PATTERN-FATIGUE] نمط ' + signal.pattern + ' مكرر — حاجز إعادة التسليح نشط', 'info');
+        return;
       }
+
+      // ✅ [V13.4] بوابة الاستنفاد الاتجاهي — امنع اتجاه الاستمرار فقط بعد رالي مستنفد
+      if (Date.now() < _exhaustUntil) {
+        const contDir = _exhaustDir === 'UP' ? 'BUY' : (_exhaustDir === 'DOWN' ? 'SELL' : null);
+        if (contDir && signal.direction === contDir) {
+          addLog('🛑 [EXHAUST-COOL] ' + signal.direction + ' ممنوع — استمرار بعد استنفاد ' + _exhaustDir, 'info');
+          return;
+        }
+      }
+
+      // ✅ [V13.4] ثقة تكيفية — ارفع عتبة القبول للأنماط الخاسرة حياً، وعطّل الضعيف جداً
+      const _adapt = _adaptiveConfGate(signal.pattern);
+      const _effThreshold = Math.max(_minConfThreshold + _adapt.bump, CFG.ABSOLUTE_MIN_CONF);  // [V24] أرضية صارمة 60%
+      if (_adapt.disabled) {
+        addLog('🚫 [PATTERN-OFF] ' + signal.pattern + ' معطّل مؤقتاً — معدل فوز حي منخفض', 'info');
+        return;
+      }
+
+      // ✅ [V13.6] فلتر الاتجاه — 'hard'=حظر | 'soft'=خصم ثقة
+      let _effConf = signal.confidence;
+      let _counterTrend = false;
+      if (!_trendAllows(signal.direction)) {
+        if (CFG.TREND_FILTER_MODE === 'hard') {
+          addLog('🚫 [TREND-BLOCK] ' + signal.direction + ' ممنوع — الاتجاه: ' + _lastTrendDirection, 'info');
+          return;
+        }
+        _counterTrend = true;
+        _effConf -= CFG.TREND_SOFT_PENALTY;
+        addLog('⚠️ [TREND-SOFT] ' + signal.direction + ' عكس الاتجاه ' + _lastTrendDirection + ' — خصم ' + CFG.TREND_SOFT_PENALTY + '% (ثقة: ' + _effConf + '%)', 'info');
+      }
+
+      // فلتر ثقة أدنى
+      if (_effConf < _effThreshold) {
+        addLog('🔮 [SIGNAL-DISCARD] ' + signal.direction + ' | ثقة: ' + _effConf + '% < ' + _effThreshold + '% | نمط: ' + signal.pattern, 'info');
+        return;
+      }
+
+      // ✅ [V14] فلتر تأكيد الأوراكل
+      const _orc = oracleAgrees(signal.direction, signal.asset);
+      if (!_orc.agree) {
+        addLog('🔮 [ORACLE-VETO] ' + signal.direction + ' مرفوض — إشارة المنصة ' + _orc.oracleDir + ' (' + _orc.reason + ')', 'info');
+        return;
+      }
+      const _oracleConfirmed = (_orc.reason === 'chat-confirm' || _orc.reason === 'plat-strength');
+      if (_oracleConfirmed) {
+        addLog('🔮 [ORACLE-OK] ' + signal.direction + ' مؤكَّد — ' + _orc.reason + (_orc.strength ? ' قوة:' + _orc.strength : '') + ' | قوة المنصة الآن: ' + (DualWSSManager.platformStrength ? DualWSSManager.platformStrength(signal.asset) : '?'), 'info');
+      }
+
+      // ✅ [V14.6] المعاكس للاتجاه + بلا تأكيد منصة = ملف الخسارة
+      if (CFG.COUNTERTREND_NEEDS_ORACLE && _counterTrend && !_oracleConfirmed &&
+          signal.confidence < CFG.COUNTERTREND_MIN_CONF) {
+        addLog('🛡️ [CT-GUARD] ' + signal.direction + ' مرفوض — معاكس للاتجاه بلا تأكيد منصة وثقة ' + signal.confidence + '% < ' + CFG.COUNTERTREND_MIN_CONF + '%', 'info');
+        return;
+      }
+
+      // ═══ فحص الصفقات المتتالية في نفس الاتجاه ═══
+      if (signal.direction === _lastTradeDirection && _consecutiveSameDir >= CFG.MAX_CONSEC_SAME_DIR) {
+        addLog('🚫 [CONSEC-LIMIT] ' + signal.direction + ' ممنوع — ' + _consecutiveSameDir + ' صفقات متتالية في نفس الاتجاه (حد: ' + CFG.MAX_CONSEC_SAME_DIR + ')', 'info');
+        return;
+      }
+
+      _signalCount++;
+      _enqueueSignal(signal);
     }
 
     // ─── معالجة إشارة signals من المنصة ─────────────────────────────────
@@ -4639,10 +4639,9 @@
           pattern: 'platform_signal',
           timestamp: Date.now(),
         };
-        // فلتر ثقة — [V22-FLOOR] أرضية صارمة 60%
-        const _platFloor = Math.max(_minConfThreshold, CFG.ABSOLUTE_MIN_CONF);
-        if (signal.confidence < _platFloor) {
-          addLog('🔮 [SIGNAL-DISCARD] ' + dir + ' | ثقة منخفضة: ' + signal.confidence + '% < ' + _platFloor + '%', 'info');
+        // فلتر ثقة
+        if (signal.confidence < _minConfThreshold) {
+          addLog('🔮 [SIGNAL-DISCARD] ' + dir + ' | ثقة منخفضة: ' + signal.confidence + '% < ' + _minConfThreshold + '%', 'info');
           return;
         }
         // فلتر اتجاه
@@ -4912,35 +4911,6 @@
         }
       }
 
-      // نمط 4: [V22-CONT] استمرار مع الاتجاه — دخول مع الزخم (لا انعكاس فقط)
-      //   يُفعَّل حين يكون الاتجاه واضحاً وآخر شمعة تتحرك معه بجسم حقيقي.
-      //   بوابة الاستنفاد (EXHAUST-COOL) تمنعه تلقائياً عند القمم/القيعان المستنفدة.
-      if (CFG.CONTINUATION_ENABLED && candles.length >= 3 && _lastTrendDirection !== 'NEUTRAL') {
-        const c1 = candles[candles.length-1];   // آخر شمعة مغلقة
-        const c0 = candles[candles.length-2];
-        const body = Math.abs(c1.close - c1.open);
-        const range = c1.high - c1.low;
-        const avgBody = (Math.abs(c1.close - c1.open) + Math.abs(c0.close - c0.open)) / 2;
-        const wantBuy  = _lastTrendDirection === 'UP'   && c1.isBullish  && c1.close > c0.close;
-        const wantSell = _lastTrendDirection === 'DOWN' && !c1.isBullish && c1.close < c0.close;
-        if ((wantBuy || wantSell) && range > 0 && body >= range * 0.4 && body >= avgBody * 0.8) {
-          let aligned = 0;
-          for (let k = 1; k <= 3 && candles.length - k >= 0; k++) {
-            const c = candles[candles.length - k];
-            if ((_lastTrendDirection === 'UP' && c.isBullish) || (_lastTrendDirection === 'DOWN' && !c.isBullish)) aligned++;
-          }
-          const conf = Math.max(CFG.CONTINUATION_MIN_CONF, Math.min(85, 60 + aligned * 7));
-          return {
-            direction: wantBuy ? 'BUY' : 'SELL',
-            asset: activeAsset,
-            price: c1.close,
-            confidence: conf,
-            pattern: 'momentum_continuation',
-            timestamp: Date.now(),
-          };
-        }
-      }
-
       return null;
     }
 
@@ -5053,30 +5023,35 @@
       _lastExecutedPattern = signal.pattern + ':' + signal.asset;
       _lastExecutedPatternTs = _now;
 
-      // [V22-2X] صفقتان حقيقيتان عند الثقة العالية (يُرسَل أمران فعليان — أصدق من مضاعفة المبلغ التجميلية)
-      const _execAmount = tradeAmount;
-      let _tradeCount = 1;
-      if (CFG.TWO_TRADES_ENABLED && (signal.confidence || 0) >= CFG.TWO_TRADES_MIN_CONF) {
-        _tradeCount = 2;
-        _lastTradeWasDouble = true;
-        STATS.doubles = (STATS.doubles || 0) + 1;
-        addLog('🔥 [2X] إشارة قوية ' + signal.confidence + '% → صفقتان × $' + _execAmount, 'signal');
+      // [V22] الصفقات المزدوجة — ضاعف المبلغ حسب قوة الإشارة (70%→×2، 85%→×3، 94%→×4)
+      let _execAmount = tradeAmount;
+      if (CFG.DOUBLE_ON_STRONG) {
+        const _c = signal.confidence || 0;
+        const _mult = _c >= CFG.IMDB_TIER_QUAD ? 4 : _c >= CFG.IMDB_TIER_TRIPLE ? 3 : _c >= CFG.IMDB_TIER_DOUBLE ? 2 : 1;
+        if (_mult > 1) {
+          _execAmount = _safeAmount(tradeAmount * Math.min(_mult, CFG.DOUBLE_MAX_MULT));
+          _lastTradeWasDouble = true;
+          STATS.doubles = (STATS.doubles || 0) + 1;
+          addLog('🔥 [DOUBLE] إشارة قوية ' + _c + '% → ×' + _mult + ' = $' + _execAmount, 'signal');
+        }
       }
 
-      // [V22] إزاحة التوقيت اليدوية (زر ⚡ توقيت التنفيذ) — التأخير الاصطناعي أُلغي (سرعة)
+      // حساب التأخير الاصطناعي + [V22] إزاحة التوقيت اليدوية (زر ⚡ توقيت التنفيذ)
+      //   _timingOffset سالب = دخول أبكر | موجب = أبطأ. الآن موصول فعلياً.
       const synthDelay = _getSyntheticDelay();
-      const jitter = CFG.DUAL_WSS_JITTER_MS ? Math.round((Math.random() - 0.5) * 2 * CFG.DUAL_WSS_JITTER_MS) : 0;
+      const jitter = Math.round((Math.random() - 0.5) * 2 * CFG.DUAL_WSS_JITTER_MS);
       const totalDelay = Math.max(0, synthDelay + jitter + _timingOffset);
 
       if (totalDelay > 0) {
-        addLog('🔮 [DELAY] تأخير: ' + totalDelay + 'مللي ثانية', 'info');
+        addLog('🔮 [DELAY] تأخير اصطناعي: ' + totalDelay + 'مللي ثانية (فجوة: ' +
+               Math.abs(_latencyGap).toFixed(0) + 'ms)', 'info');
         if (_queueTimer) clearTimeout(_queueTimer);
         _queueTimer = setTimeout(() => {
           _queueTimer = null;
-          _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount);
+          _timedExecute(signal.direction, signal.asset, _execAmount);
         }, totalDelay);
       } else {
-        _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount);
+        _timedExecute(signal.direction, signal.asset, _execAmount);
       }
     }
 
@@ -5105,8 +5080,8 @@
       const ms = Math.round(durSec * 1000 * CFG.ETE_WAIT_FRAC);
       return Math.max(CFG.ETE_WAIT_MIN_MS, Math.min(CFG.ETE_WAIT_MAX_MS, ms));
     }
-    function _timedExecute(direction, asset, amount, count) {
-      if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount, count); return; }
+    function _timedExecute(direction, asset, amount) {
+      if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount); return; }
       if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
       const maxWait = _eteMaxWait();
       const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 5));
@@ -5114,7 +5089,7 @@
       const first = _entryAligned(asset, direction);
       if (first.ok) {
         if (first.sl) addLog('🎯 [ENTRY] دخول فوري — الزخم ' + first.reason + ' يوافق ' + direction, 'signal');
-        _executeDualTrade(direction, asset, amount, count); return;
+        _executeDualTrade(direction, asset, amount); return;
       }
       addLog('⏳ [ENTRY] انتظار توقيت — الزخم ' + first.reason + ' يعاكس ' + direction + ' | مهلة ' + maxWait + 'ms (' + Math.round(CFG.ETE_WAIT_FRAC*100) + '% من ' + durSec + 'ث)', 'info');
       _entryTimer = setInterval(() => {
@@ -5123,12 +5098,12 @@
         if (c.ok && c.reason !== 'مسطّح') {
           clearInterval(_entryTimer); _entryTimer = null;
           addLog('🎯 [ENTRY] الزخم توافق (' + c.reason + ') — دخول ' + direction, 'signal');
-          _executeDualTrade(direction, asset, amount, count);
+          _executeDualTrade(direction, asset, amount);
         } else if (Date.now() >= deadline) {
           clearInterval(_entryTimer); _entryTimer = null;
           if (CFG.ETE_ON_TIMEOUT === 'enter') {
             addLog('🎯 [ENTRY] انتهت المهلة — دخول رغم عدم التوافق ' + direction, 'info');
-            _executeDualTrade(direction, asset, amount, count);
+            _executeDualTrade(direction, asset, amount);
           } else {
             addLog('🚫 [ENTRY] انتهت المهلة دون توافق — إلغاء ' + direction + ' (تجنّب توقيت سيّئ)', 'info');
           }
@@ -5136,7 +5111,7 @@
       }, CFG.ETE_POLL_MS);
     }
 
-    function _executeDualTrade(direction, asset, overrideAmount, count) {
+    function _executeDualTrade(direction, asset, overrideAmount) {
       if (!autoTrade) return;
       if (tradeExec) return;
       if (!tradeWSOrig || !tradeWS || tradeWS.readyState !== 1) {
@@ -5149,16 +5124,15 @@
       const amt = overrideAmount || tradeAmount;
       const safeAmt = _safeAmount(amt);
       const tradeSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 3));
-      const nOrders = Math.max(1, Math.min(count || 1, 2));   // [V22-2X] حتى صفقتين
+      const rid = _nextReqId();
 
       if (!_payloadCache.prefixCall) _rebuildPayloadCache();
       const prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
       const suffix = action === 'call' ? _payloadCache.suffixCall : _payloadCache.suffixPut;
+      const msg = prefix + rid + suffix;
 
       try {
-        for (let k = 0; k < nOrders; k++) {
-          tradeWSOrig(prefix + _nextReqId() + suffix);   // [V22-2X] أمر فعلي لكل صفقة
-        }
+        tradeWSOrig(msg);
         tradeExec = true;
         lastTradeMs = Date.now();
         // ✅ تحرير تلقائي لـ tradeExec بعد مدة الصفقة + 5 ثواني أمان
@@ -5182,7 +5156,7 @@
         _lastTradePrice = _lastSignal ? _lastSignal.price : 0;
         // ✅ مسح الإشارة المعلقة بعد التنفيذ الناجح
         _pendingRetrySignal = null;
-        addLog('⚡ [DUAL-EXEC] ' + direction + ' | ' + (asset || activeAsset) + ' | $' + safeAmt + (nOrders > 1 ? ' ×' + nOrders : '') + ' | ' + tradeSec + 'ث', 'signal');
+        addLog('⚡ [DUAL-EXEC] ' + direction + ' | ' + (asset || activeAsset) + ' | $' + safeAmt + ' | ' + tradeSec + 'ث', 'signal');
         updateTradeBtn();
       } catch(err) {
         addLog('❌ [DUAL-WSS] فشل إرسال الأمر: ' + err.message, 'error');
