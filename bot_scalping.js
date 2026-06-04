@@ -1769,7 +1769,18 @@
   #cbScrollArea::-webkit-scrollbar-thumb{background:#33485a;border-radius:3px;}
   /* ══ STATS GRID ══ */
   .cb-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:10px 10px 0;}
-  .cb-stat{background:#16222e;border:1px solid #243443;border-radius:10px;padding:7px 9px;border-right:3px solid #1E3A2F;}
+  /* [V25] شريط الفرص المتحرك (أكثر الأزواج حركة + العائد) */
+  .cb-marquee{margin:8px 10px 0;overflow:hidden;white-space:nowrap;background:linear-gradient(90deg,#0c1620,#16222e,#0c1620);border:1px solid #243443;border-radius:9px;height:24px;line-height:24px;position:relative;box-shadow:inset 0 0 8px rgba(0,0,0,0.4);}
+  .cb-marquee-track{display:inline-block;padding-left:100%;animation:cbMarq 22s linear infinite;font-size:11px;font-weight:700;}
+  .cb-marquee:hover .cb-marquee-track{animation-play-state:paused;}
+  .cb-marq-item{display:inline-block;margin:0 14px;}
+  .cb-marq-otc{color:#00d264;}
+  .cb-marq-pay{color:#ffd24a;}
+  .cb-marq-up{color:#00d264;}
+  .cb-marq-dn{color:#ff5b6e;}
+  .cb-marq-hot{color:#ff9f1c;}
+  .cb-marq-sep{color:#3a4d5e;margin:0 2px;}
+  @keyframes cbMarq{0%{transform:translateX(0);}100%{transform:translateX(-100%);}}  .cb-stat{background:#16222e;border:1px solid #243443;border-radius:10px;padding:7px 9px;border-right:3px solid #1E3A2F;}
   .cb-stat-lbl{display:block;font-size:8.5px;color:#7c8d9b;margin-bottom:3px;font-weight:500;}
   .cb-stat-val{font-size:11px;font-weight:700;color:#eef3f7;}
   .cb-stat-val.w{color:#46d98e;}.cb-stat-val.g{color:#16A34A;}.cb-stat-val.y{color:#D97706;}
@@ -2012,6 +2023,10 @@
         <div class="cb-stat"><span class="cb-stat-lbl">العد التنازلي</span><span class="cb-stat-val y" id="cbCd">–</span></div>
         <div class="cb-stat"><span class="cb-stat-lbl">الرصيد</span><span class="cb-stat-val g" id="cbBalance">–</span></div>
         <div class="cb-stat"><span class="cb-stat-lbl">تيكات</span><span class="cb-stat-val" id="cbTickCount">0</span></div>
+      </div>
+
+      <div class="cb-marquee" id="cbMarquee" title="أكثر الأزواج حركة (OTC) + نسبة العائد">
+        <div class="cb-marquee-track" id="cbMarqueeTrack">🔎 جاري رصد الفرص…</div>
       </div>
 
       <div class="cb-ind-row">
@@ -2616,6 +2631,41 @@
     if (ico) ico.classList.toggle('on', effectiveConnected);
   }
 
+  // [V25] شريط الفرص المتحرك — أكثر الأزواج حركة (OTC) + نسبة العائد
+  function _renderMarquee() {
+    try {
+      const trackEl = W.document.getElementById('cbMarqueeTrack');
+      if (!trackEl) return;
+      let ops = [];
+      try { ops = (DualWSSManager.getOpportunities && DualWSSManager.getOpportunities()) || []; } catch(_) {}
+      const rows = [];
+      for (const o of ops) {
+        const open = _assetIsOpen.has(o.asset) ? _assetIsOpen.get(o.asset) : true;
+        if (!open) continue;
+        rows.push({
+          asset: o.asset, strength: o.strength || 0, dir: o.dir,
+          isOtc: /_otc$/i.test(o.asset),
+          payout: _assetPayouts.has(o.asset) ? Math.round(_assetPayouts.get(o.asset) * 100) : null,
+        });
+      }
+      // ترتيب: OTC أولاً، ثم الأقوى حركة، ثم الأعلى عائداً
+      rows.sort((a, b) => (b.isOtc - a.isOtc) || (b.strength - a.strength) || ((b.payout||0) - (a.payout||0)));
+      const top = rows.slice(0, 14);
+      if (!top.length) { trackEl.textContent = '🔎 جاري رصد الفرص…'; return; }
+      const html = top.map(r => {
+        const name = r.asset.replace(/_otc$/i, '').replace('_', '/');
+        const tag = r.isOtc ? '<span class="cb-marq-otc">' + name + ' OTC</span>' : name;
+        const hot = r.strength >= 4 ? '🔥' : (r.strength >= 3 ? '⚡' : '•');
+        const arrow = r.dir === 'BUY' ? '<span class="cb-marq-up">▲</span>'
+                    : r.dir === 'SELL' ? '<span class="cb-marq-dn">▼</span>' : '';
+        const pay = r.payout != null ? '<span class="cb-marq-pay">' + r.payout + '%</span>' : '';
+        return '<span class="cb-marq-item">' + hot + ' ' + tag + ' ' + arrow +
+               ' <span class="cb-marq-hot">قوة' + r.strength + '</span> <span class="cb-marq-sep">·</span> ' + pay + '</span>';
+      }).join('<span class="cb-marq-sep">|</span>');
+      trackEl.innerHTML = html;
+    } catch(_) {}
+  }
+
   function updateHUD() {
     const aEl=W.document.getElementById('cbAsset'), pEl=W.document.getElementById('cbPeriod');
     const tdEl=W.document.getElementById('cbTradeDur');
@@ -3081,6 +3131,9 @@
     // Refresh DB stats every 30s
     _dbUpdateStats();
     _v11_setInterval(_dbUpdateStats, 30000);
+    // [V25] حدّث شريط الفرص المتحرك كل 3 ثواني
+    _renderMarquee();
+    _v11_setInterval(_renderMarquee, 3000);
     // Periodic GitHub auto-sync
     _v11_setInterval(() => _githubSync(false), CFG.GH_SYNC_INTERVAL_MS);
     // Prune old records at startup
@@ -4213,6 +4266,21 @@
         for (const p of pairs) { if (Array.isArray(p) && p.length >= 2) rec.tf[p[0]] = p[1]; }
       }
       try { _tryGenerate(activeAsset); } catch(_) {}   // [V16] قوة المنصة قد تُولّد صفقة
+    }
+    // [V25] فرص الأزواج للشريط المتحرك — قوة (0-4) + اتجاه الشات لكل زوج طازج
+    function getOpportunities() {
+      const out = [], now = Date.now();
+      for (const a in _platSig) {
+        const rec = _platSig[a];
+        if (!rec || (now - rec.ts) > 90000) continue;     // طازج خلال 90ث فقط
+        const cs = _chatSig[a];
+        out.push({
+          asset: a,
+          strength: platformStrength(a),
+          dir: (cs && (now - cs.ts) < 180000) ? cs.dir : null,
+        });
+      }
+      return out;
     }
     // إشارة الشات: forecast UP2/DOWN2, timeframe "M1".. → اتجاه صريح
     function onChatSignal(sig) {
@@ -5352,6 +5420,7 @@
       onCandleClose,
       fastEval,
       tickPulse,
+      getOpportunities,
       onPlatformSignal,
       getLatencyGap:     () => _latencyGap,
       getLastSignal:     () => _lastSignal,
