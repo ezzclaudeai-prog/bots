@@ -204,6 +204,12 @@
     ETE_WAIT_MAX_MS         : 5000,        // حدّ أقصى للانتظار (لفريمات 15ث+)
     ETE_POLL_MS             : 120,         // فحص الموافقة كل N ميلي ثانية
     ETE_ON_TIMEOUT          : 'skip',      // عند انتهاء المهلة دون توافق: 'skip' إلغاء | 'enter' دخول
+    // ─── [V23] SuperTrend — يحسب نفس مؤشر الرسم (SuperTrend 5 3) ويدخل على أسهم Buy/Sell ──
+    ST_ENABLED              : true,        // ✅ تفعيل إشارات SuperTrend (انعكاس الاتجاه = سهم على الرسم)
+    ST_PERIOD              : 5,           // طول ATR (الرقم الأول في «SuperTrend 5 3»)
+    ST_MULT                : 3,           // المضاعِف (الرقم الثاني)
+    ST_BASE_CONF           : 82,          // ثقة إشارة الانعكاس (تتجاوز أرضية بلا-أوراكل 72%)
+    ST_AS_TREND_FILTER     : true,        // ✅ استخدم اتجاه SuperTrend كمرشّح: ارفض الأنماط المعاكسة له
     // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
     ORACLE_LAB_ENABLED      : true,        // ✅ تسجيل خام: يربط كل صفقة بمصدرها ونتيجتها (آمن)
     ORACLE_LAB_REPORT_EVERY : 10,          // اطبع جدول الأداء كل N صفقة
@@ -308,6 +314,7 @@
   let _lastTrendDirection = 'NEUTRAL';
   let _trendEmaStack = [];
   // ✅ [V13.4] حالة الاستنفاد الاتجاهي + سجل أداء الأنماط الحي
+  let _lastSTDir    = null;    // [V23] اتجاه SuperTrend الحالي ('BUY'/'SELL')
   let _exhaustDir   = null;    // 'UP' أو 'DOWN' — اتجاه آخر استنفاد مكتشف
   let _exhaustUntil = 0;       // وقف اتجاه الاستمرار حتى هذا الوقت
   let _lastExhaustLogTs = 0;   // ✅ [V14.2] تقييد تكرار سجل الاستنفاد
@@ -4523,9 +4530,31 @@
         // لا return — نكمل لتقييم النمط؛ بوابة الاستنفاد الاتجاهي تتكفّل بالباقي
       }
 
+      // ═══ [V23] SuperTrend — يلتقط انعكاسات الاتجاه (أسهم Buy/Sell على الرسم) ═══
+      let _stSig = null;
+      if (CFG.ST_ENABLED) {
+        const st = _computeSuperTrend(candles, CFG.ST_PERIOD, CFG.ST_MULT);
+        if (st) {
+          _lastSTDir = st.dir;
+          if (st.flip) {
+            addLog('🟢🔴 [SUPERTREND] انعكاس → ' + st.dir + ' @ ' + candles[candles.length-1].close.toFixed(5) + ' (مثل سهم الرسم)', 'signal');
+            _stSig = {
+              direction: st.dir, asset: a, price: candles[candles.length-1].close,
+              confidence: CFG.ST_BASE_CONF, pattern: 'supertrend_flip', timestamp: Date.now(),
+            };
+          }
+        }
+      }
+
       // ═══ فحص تكرار النمط — منع نفس النمط من التكرار بسرعة ═══
       // ✅ [V13.4] مرّر تاريخاً كافياً لتفعيل فحص القمة/القاع (كان slice(-5) يُعطّله)
-      const signal = _evaluateCandlePattern(candles.slice(-(CFG.THREE_CANDLE_PEAK_WINDOW + 5)));
+      //   [V23] انعكاس SuperTrend له الأولوية (إشارة الرسم)، ثم أنماط الشموع كاحتياط
+      let signal = _stSig || _evaluateCandlePattern(candles.slice(-(CFG.THREE_CANDLE_PEAK_WINDOW + 5)));
+      // [V23] مرشّح اتجاه SuperTrend: ارفض أنماط الشموع المعاكسة لاتجاه SuperTrend الحالي
+      if (signal && CFG.ST_AS_TREND_FILTER && !_stSig && _lastSTDir && signal.direction !== _lastSTDir) {
+        addLog('🚫 [ST-FILTER] ' + signal.direction + ' مرفوض — معاكس لاتجاه SuperTrend (' + _lastSTDir + ')', 'info');
+        return;
+      }
       if (signal) {
         if (_isPatternFatigued(signal)) {
           addLog('🔄 [PATTERN-FATIGUE] نمط ' + signal.pattern + ' مكرر — حاجز إعادة التسليح نشط', 'info');
@@ -4553,7 +4582,8 @@
         // ✅ [V13.6] فلتر الاتجاه — وضعان: 'hard'=حظر تام | 'soft'=خصم ثقة (يبقى السكالبينغ سريعاً)
         let _effConf = signal.confidence;
         let _counterTrend = false;
-        if (!_trendAllows(signal.direction)) {
+        // [V23] انعكاس SuperTrend يُعرّف اتجاهاً جديداً → معفى من خصم «عكس الاتجاه»
+        if (signal.pattern !== 'supertrend_flip' && !_trendAllows(signal.direction)) {
           if (CFG.TREND_FILTER_MODE === 'hard') {
             addLog('🚫 [TREND-BLOCK] ' + signal.direction + ' ممنوع — الاتجاه: ' + _lastTrendDirection, 'info');
             return;
@@ -4724,6 +4754,48 @@
     }
 
     // ─── تقييم نمط الشموع ─────────────────────────────────────────────
+    // ✅ [V23] SuperTrend — نفس مؤشر الرسم. يُرجِع الاتجاه الحالي + هل انعكس على آخر شمعة (= سهم Buy/Sell)
+    function _computeSuperTrend(candles, period, mult) {
+      const n = candles.length;
+      if (n < period + 2) return null;
+      // True Range
+      const tr = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const h = candles[i].high, l = candles[i].low;
+        const pc = i > 0 ? candles[i-1].close : candles[i].close;
+        tr[i] = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+      }
+      // ATR (Wilder RMA)
+      const atr = new Array(n).fill(0);
+      let seed = 0; for (let i = 0; i < period; i++) seed += tr[i]; seed /= period;
+      atr[period - 1] = seed;
+      for (let i = period; i < n; i++) atr[i] = (atr[i-1] * (period - 1) + tr[i]) / period;
+      // النطاقات + الاتجاه (صياغة TradingView القياسية)
+      let prevUp = 0, prevDn = 0, trend = 1, prevTrend = 1, trendBeforeLast = 1;
+      for (let i = period - 1; i < n; i++) {
+        const hl2 = (candles[i].high + candles[i].low) / 2;
+        let up = hl2 - mult * atr[i];          // نطاق سفلي (دعم — يُستخدم في الصعود)
+        let dn = hl2 + mult * atr[i];          // نطاق علوي (مقاومة — يُستخدم في الهبوط)
+        const cPrev = i > 0 ? candles[i-1].close : candles[i].close;
+        if (i > period - 1) {
+          up = cPrev > prevUp ? Math.max(up, prevUp) : up;
+          dn = cPrev < prevDn ? Math.min(dn, prevDn) : dn;
+          if (prevTrend === -1 && candles[i].close > prevDn) trend = 1;
+          else if (prevTrend === 1 && candles[i].close < prevUp) trend = -1;
+          else trend = prevTrend;
+        } else {
+          trend = candles[i].close >= dn ? 1 : -1;
+        }
+        if (i === n - 1) trendBeforeLast = prevTrend;
+        prevUp = up; prevDn = dn; prevTrend = trend;
+      }
+      return {
+        dir: trend === 1 ? 'BUY' : 'SELL',
+        flip: trend !== trendBeforeLast,
+        line: trend === 1 ? prevUp : prevDn,
+      };
+    }
+
     function _evaluateCandlePattern(candles) {
       if (candles.length < 3) return null;
 
