@@ -562,6 +562,7 @@
       STATS.wins++; STATS.winStreak++; STATS.lossStreak=0;
       if(STATS.winStreak>STATS.bestStreak) STATS.bestStreak=STATS.winStreak;
       if(wasTVE) STATS.tveWins++;
+      if(_lastTradeWasDouble) STATS.doubleWins = (STATS.doubleWins||0) + 1;   // [V24.2] وصل عدّاد الفوز المزدوج (كان لا يُزاد أبداً)
       // فوز → إلغاء حالات الحماية
       _ghostTradeActive = false;
       _ghostWatching = false;
