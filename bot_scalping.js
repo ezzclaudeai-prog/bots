@@ -88,6 +88,11 @@
     SEE_MAX_MS               : 5000,
     MINI_BACKTEST_ENABLED    : false,
     IMDB_TIER_DOUBLE         : 70,
+    // [V22] مضاعفة المبلغ عند الإشارة القوية (الصفقات المزدوجة)
+    DOUBLE_ON_STRONG         : true,       // ✅ ضاعف المبلغ حسب قوة الإشارة
+    IMDB_TIER_TRIPLE         : 85,         // ثقة ≥85% → ×3
+    IMDB_TIER_QUAD           : 94,         // ثقة ≥94% → ×4
+    DOUBLE_MAX_MULT          : 4,          // أقصى مضاعفة
     SIGNAL_WATCHER_MS        : 25,
     SIGNAL_WATCHER_EXPIRY_MS : 1500,
     MAX_LOSS_STREAK          : 3,
@@ -142,8 +147,7 @@
     MAX_CONSEC_SAME_DIR     : 2,          // حد الصفقات المتتالية في نفس الاتجاه (2 = أقصى صفقتين BUY أو SELL متتاليتين)
     CONSEC_CONF_PENALTY     : 20,         // خصم من الثقة لكل صفقة متتالية في نفس الاتجاه (20% → 80% تصبح 60%)
     PATTERN_REARM_ENABLED   : true,       // حاجز إعادة تسليح النمط — نفس النمط لا يكرر خلال فترة الحماية
-    PATTERN_REARM_MIN_MS    : 4000,       // [V20] خُفّض 10000→4000 لتسريع تكرار الأنماط الرابحة
-    PATTERN_REARM_FRAME_MULT: 1,          // [V20] مضاعف مدة الشمعة (كان 2× → 1× = أسرع)
+    PATTERN_REARM_MIN_MS    : 10000,      // الحد الأدنى لنافذة إعادة التسليح (10 ثانية) — تقليل الانتظار على الفريمات القصيرة
     MAX_TRADES_PER_WINDOW   : 12,         // ✅ [V14.5] سقف الصفقات/دقيقة (12 بدل 4 — تسريع السكالبينغ)
     TRADE_WINDOW_MS         : 60000,      // نافذة العد: 60 ثانية
 
@@ -162,7 +166,6 @@
     TREND_SOFT_PENALTY      : 12,          // ✅ [V13.6] خصم الثقة للإشارة المعاكسة في الوضع الناعم
     COUNTERTREND_NEEDS_ORACLE: false,      // ✅ [V14.6] اختياري ومُطفأ: بيانات السجل أثبتت أن المعاكس 75% رابح — لا تحجبه
     COUNTERTREND_MIN_CONF    : 90,         // عتبة الثقة لو فعّلته يدوياً
-    NO_ORACLE_MIN_CONF       : 74,         // [V21] بلا دعم أوراكل (chat=— و plat<3) → اشترط ثقة نمط ≥ هذه (0=معطّل)
     EXHAUSTION_COOLDOWN_MS  : 4000,        // ✅ [V13.6] بعد الاستنفاد امنع اتجاه الاستمرار 4ث (كان 9 — أسرع)
     MIN_TRADE_SEC           : 3,           // ✅ [V14.2] حد أدنى لمدة الصفقة — المنصة ترفض <3ث (IncorrectExpTime)
     ADAPTIVE_CONF_ENABLED   : true,        // ✅ ثقة تكيفية — رفع العتبة للأنماط الخاسرة حياً
@@ -188,7 +191,7 @@
     PSE_SLOPE_MIN_REL       : 0.000020,   // أدنى عائد نسبي لاعتبار الميل اتجاهاً واضحاً
     // ─── [V18] التقييم السريع داخل الشمعة — تسريع تكرار التداول ──────────────
     FAST_EVAL_ENABLED       : true,        // ✅ قيّم الأنماط داخل الشمعة (لا تنتظر إغلاقها)
-    FAST_EVAL_MS            : 1000,        // [V20] أدنى فاصل بين تقييمين سريعين (خُفّض 1500→1000)
+    FAST_EVAL_MS            : 1500,        // أدنى فاصل بين تقييمين سريعين (مللي ثانية)
     FAST_EVAL_MIN_TICKS     : 4,           // أدنى عدد تيكات في الشمعة المتشكّلة قبل تقييمها
     // ─── [V17] محرّك توقيت الدخول (ETE) — لا تدخل إلا حين يوافق الزخم اللحظي ──
     ENTRY_TIMING_ENABLED    : true,        // ✅ تأجيل الدخول حتى يوافق ميل التيك اتجاه الصفقة
@@ -200,10 +203,6 @@
     ETE_WAIT_MAX_MS         : 5000,        // حدّ أقصى للانتظار (لفريمات 15ث+)
     ETE_POLL_MS             : 120,         // فحص الموافقة كل N ميلي ثانية
     ETE_ON_TIMEOUT          : 'skip',      // عند انتهاء المهلة دون توافق: 'skip' إلغاء | 'enter' دخول
-    // [V19] دخول فوري للقناعة العالية (يعالج الدخول المتأخر) + حماية عكس الشات
-    ETE_INSTANT_CONF        : 88,          // ثقة ≥ هذه → دخول فوري بلا انتظار توقيت
-    ETE_BLOCK_WEAK_COUNTER_CHAT : true,    // امنع: عكس الشات + بلا دعم منصة + زخم ضعيف (مصدر معظم الخسائر)
-    ETE_STRONG_REL          : 0.000040,   // أدنى زخم نسبي يُجيز التداول عكس الشات (40e-6)
     // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
     ORACLE_LAB_ENABLED      : true,        // ✅ تسجيل خام: يربط كل صفقة بمصدرها ونتيجتها (آمن)
     ORACLE_LAB_REPORT_EVERY : 10,          // اطبع جدول الأداء كل N صفقة
@@ -271,8 +270,9 @@
   let fastCloseAt     = 0;
   let clockOffset     = 0;
   let currentBalance  = 0;
-  let tradeAmount     = CFG.DEFAULT_AMOUNT;
-  let _manualAmountOverride = false;
+  // [V22] استرجاع آخر مبلغ محفوظ — لا حاجة لتغييره كل تحديث
+  let tradeAmount     = (function(){ try { const v = parseFloat(W.localStorage.getItem('cb_amount')); return (Number.isFinite(v) && v > 0) ? v : CFG.DEFAULT_AMOUNT; } catch(_) { return CFG.DEFAULT_AMOUNT; } })();
+  let _manualAmountOverride = (function(){ try { return Number.isFinite(parseFloat(W.localStorage.getItem('cb_amount'))); } catch(_) { return false; } })();
   let _minConfThreshold = 75; // حد الثقة الأدنى — يتحكم به سلايدر الواجهة
   let accountBalance  = null;
   let _dynamicPayout  = null;
@@ -1704,112 +1704,119 @@
   /* ══ ROOT ══ */
   #cbRoot{position:fixed;bottom:16px;left:16px;z-index:2147483647;font-family:'IBM Plex Sans Arabic',-apple-system,BlinkMacSystemFont,sans-serif;direction:rtl;}
   /* ══ LAUNCHER ICON ══ */
-  #cbIcon{width:50px;height:50px;border-radius:15px;background:#fff;border:1.5px solid #D1E8DC;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 18px rgba(30,58,47,0.14);transition:all 0.2s ease;}
-  #cbIcon:hover{transform:scale(1.05);box-shadow:0 6px 24px rgba(30,58,47,0.20);}
+  #cbIcon{width:50px;height:50px;border-radius:15px;background:linear-gradient(145deg,#13212e,#0c1a16);border:1.5px solid #2a4a3c;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,0.5),0 0 18px rgba(0,210,100,0.25);transition:all 0.2s ease;animation:cbBorderGlow 6s ease-in-out infinite;}
+  #cbIcon:hover{transform:scale(1.08);box-shadow:0 6px 26px rgba(0,0,0,0.55),0 0 26px rgba(0,210,100,0.4);}
   #cbIcon.buy{border-color:#86EFAC;box-shadow:0 4px 18px rgba(22,163,74,0.18);}
   #cbIcon.sell{border-color:#FCA5A5;box-shadow:0 4px 18px rgba(220,38,38,0.18);}
   #cbIconSig{font-size:20px;}
-  #cbIconDot{width:6px;height:6px;border-radius:50%;background:#D1D5DB;margin-top:3px;transition:background 0.3s;}
+  #cbIconDot{width:6px;height:6px;border-radius:50%;background:#33485a;margin-top:3px;transition:background 0.3s;}
   #cbIconDot.on{background:#16A34A;}
-  /* ══ MAIN PANEL ══ */
-  #cbPanel{position:fixed;bottom:76px;left:8px;width:300px;background:#F8F5F0;border:1px solid #E5DDD5;border-radius:20px;box-shadow:0 8px 40px rgba(0,0,0,0.11);display:none;flex-direction:column;overflow:hidden;max-height:calc(100svh - 120px);touch-action:none;}
+  /* ══ MAIN PANEL — [V22] دارك خرافي ══ */
+  @keyframes cbHueShift{0%{filter:hue-rotate(0deg);}100%{filter:hue-rotate(360deg);}}
+  @keyframes cbGradFlow{0%{background-position:0% 50%;}50%{background-position:100% 50%;}100%{background-position:0% 50%;}}
+  @keyframes cbBorderGlow{0%,100%{box-shadow:0 8px 40px rgba(0,0,0,0.5),0 0 22px rgba(0,210,100,0.18),inset 0 0 0 1px rgba(0,210,100,0.10);}50%{box-shadow:0 8px 44px rgba(0,0,0,0.55),0 0 30px rgba(0,170,255,0.22),inset 0 0 0 1px rgba(0,170,255,0.14);}}
+  @keyframes cbWmFloat{0%{transform:translate(-50%,-50%) rotate(-18deg) scale(1);opacity:0.05;}50%{transform:translate(-50%,-54%) rotate(-18deg) scale(1.08);opacity:0.09;}100%{transform:translate(-50%,-50%) rotate(-18deg) scale(1);opacity:0.05;}}
+  #cbPanel{position:fixed;bottom:76px;left:8px;width:300px;background:linear-gradient(165deg,#0d1722 0%,#0a1219 60%,#0c1a16 100%);border:1px solid #243443;border-radius:20px;display:none;flex-direction:column;overflow:hidden;max-height:calc(100svh - 120px);touch-action:none;animation:cbBorderGlow 6s ease-in-out infinite;}
+  /* العلامة المائية المتحركة خلف المحتوى */
+  #cbPanel::before{content:'⚡ QUANTUM';position:absolute;top:50%;left:50%;font-size:54px;font-weight:900;letter-spacing:2px;color:transparent;background:linear-gradient(90deg,#00d264,#00aaff,#9b5cff,#00d264);-webkit-background-clip:text;background-clip:text;white-space:nowrap;pointer-events:none;z-index:0;animation:cbWmFloat 9s ease-in-out infinite;}
+  #cbScrollArea,.cb-hdr,#cbStatus{position:relative;z-index:1;}
   #cbPanel.open{display:flex;}
   #cbPanel.minimized #cbScrollArea{display:none;}
   @media(max-width:480px){#cbPanel{width:calc(100vw - 16px);left:8px;bottom:72px;max-height:calc(100svh - 130px);}}
   @media(min-width:768px){#cbPanel{width:320px;}}
   /* ══ HEADER ══ */
-  .cb-hdr{display:flex;align-items:center;gap:8px;padding:12px 14px;cursor:grab;flex-shrink:0;background:#fff;border-bottom:1px solid #EDE8E2;border-radius:20px 20px 0 0;}
+  .cb-hdr{display:flex;align-items:center;gap:8px;padding:12px 14px;cursor:grab;flex-shrink:0;background:linear-gradient(100deg,#11202c,#0e2b22);border-bottom:1px solid #243443;border-radius:20px 20px 0 0;}
   .cb-hdr:active{cursor:grabbing;}
-  .cb-hdr-dot{width:8px;height:8px;border-radius:50%;background:#D1D5DB;flex-shrink:0;transition:background 0.3s;}
-  .cb-hdr-dot.on{background:#16A34A;box-shadow:0 0 0 3px rgba(22,163,74,0.15);}
-  .cb-ttl{font-size:11px;font-weight:700;color:#1E3A2F;letter-spacing:0.3px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .cb-hdr-dot{width:8px;height:8px;border-radius:50%;background:#56707f;flex-shrink:0;transition:background 0.3s;}
+  .cb-hdr-dot.on{background:#00d264;box-shadow:0 0 0 3px rgba(0,210,100,0.18),0 0 12px rgba(0,210,100,0.6);animation:cbBorderGlow 3s ease-in-out infinite;}
+  .cb-ttl{font-size:12px;font-weight:800;letter-spacing:0.6px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:linear-gradient(90deg,#00d264,#3fe0ff,#9b8cff,#00d264);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:cbGradFlow 5s linear infinite;text-shadow:0 0 18px rgba(0,210,100,0.25);}
   .cb-hdr-actions{display:flex;gap:4px;flex-shrink:0;}
-  .cb-icon-btn{width:24px;height:24px;border-radius:8px;background:#F3EDE7;border:1px solid #E5DDD5;color:#6B7280;font-family:inherit;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s;}
-  .cb-icon-btn:hover{background:#FFE4E4;border-color:#FCA5A5;color:#DC2626;}
+  .cb-icon-btn{width:24px;height:24px;border-radius:8px;background:#1b2a36;border:1px solid #243443;color:#9fb2c0;font-family:inherit;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s;}
+  .cb-icon-btn:hover{background:#3a1a1a;border-color:#FCA5A5;color:#DC2626;}
   /* ══ SCROLL AREA ══ */
-  #cbScrollArea{overflow-y:auto;flex:1;background:#F8F5F0;}
+  #cbScrollArea{overflow-y:auto;flex:1;background:#0c151c;}
   #cbScrollArea::-webkit-scrollbar{width:3px;}
-  #cbScrollArea::-webkit-scrollbar-thumb{background:#D1C8BE;border-radius:3px;}
+  #cbScrollArea::-webkit-scrollbar-thumb{background:#33485a;border-radius:3px;}
   /* ══ STATS GRID ══ */
   .cb-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:10px 10px 0;}
-  .cb-stat{background:#fff;border:1px solid #EDE8E2;border-radius:10px;padding:7px 9px;border-right:3px solid #1E3A2F;}
-  .cb-stat-lbl{display:block;font-size:8.5px;color:#9CA3AF;margin-bottom:3px;font-weight:500;}
-  .cb-stat-val{font-size:11px;font-weight:700;color:#1A1A1A;}
-  .cb-stat-val.w{color:#1E3A2F;}.cb-stat-val.g{color:#16A34A;}.cb-stat-val.y{color:#D97706;}
+  .cb-stat{background:#16222e;border:1px solid #243443;border-radius:10px;padding:7px 9px;border-right:3px solid #1E3A2F;}
+  .cb-stat-lbl{display:block;font-size:8.5px;color:#7c8d9b;margin-bottom:3px;font-weight:500;}
+  .cb-stat-val{font-size:11px;font-weight:700;color:#eef3f7;}
+  .cb-stat-val.w{color:#46d98e;}.cb-stat-val.g{color:#16A34A;}.cb-stat-val.y{color:#D97706;}
   /* ══ INDICATOR ROWS ══ */
   .cb-ind-row{display:flex;align-items:center;gap:6px;padding:5px 10px 0;font-size:9px;}
-  .cb-ind-lbl{color:#6B7280;flex-shrink:0;min-width:52px;font-weight:500;}
-  .cb-ind-val{font-family:'SF Mono',ui-monospace,monospace;color:#374151;font-size:9px;flex:1;}
-  .cb-ind-badge{font-size:8px;font-weight:700;padding:2px 7px;border-radius:20px;background:#F3EDE7;border:1px solid #E5DDD5;color:#6B7280;flex-shrink:0;}
-  .cb-ind-badge.up{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .cb-ind-badge.dn{background:#FEF2F2;border-color:#FCA5A5;color:#DC2626;}
-  .cb-ind-badge.yw{background:#FFFBEB;border-color:#FCD34D;color:#D97706;}
+  .cb-ind-lbl{color:#9fb2c0;flex-shrink:0;min-width:52px;font-weight:500;}
+  .cb-ind-val{font-family:'SF Mono',ui-monospace,monospace;color:#dfe7ee;font-size:9px;flex:1;}
+  .cb-ind-badge{font-size:8px;font-weight:700;padding:2px 7px;border-radius:20px;background:#1b2a36;border:1px solid #243443;color:#9fb2c0;flex-shrink:0;}
+  .cb-ind-badge.up{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .cb-ind-badge.dn{background:#2a1416;border-color:#FCA5A5;color:#DC2626;}
+  .cb-ind-badge.yw{background:#2a2410;border-color:#FCD34D;color:#D97706;}
   /* ══ CONFIDENCE BAR ══ */
   .cb-conf-bar{display:flex;align-items:center;gap:6px;padding:8px 10px 0;font-size:9px;}
-  .cb-conf-lbl{color:#6B7280;flex-shrink:0;font-weight:500;}
-  .cb-conf-score{font-family:'SF Mono',ui-monospace,monospace;font-size:12px;font-weight:700;color:#1E3A2F;}
-  .cb-conf-track{flex:1;height:5px;border-radius:3px;background:#E5DDD5;overflow:hidden;}
+  .cb-conf-lbl{color:#9fb2c0;flex-shrink:0;font-weight:500;}
+  .cb-conf-score{font-family:'SF Mono',ui-monospace,monospace;font-size:12px;font-weight:700;color:#46d98e;}
+  .cb-conf-track{flex:1;height:5px;border-radius:3px;background:#243443;overflow:hidden;}
   .cb-conf-fill{height:100%;border-radius:3px;transition:width 0.3s,background 0.3s;}
-  .cb-conf-detail{font-size:7.5px;color:#9CA3AF;padding:2px 10px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cb-conf-detail{font-size:7.5px;color:#7c8d9b;padding:2px 10px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   /* ══ DOUBLE BADGE ══ */
   .cb-dbl-row{display:flex;align-items:center;gap:6px;padding:4px 10px 0;}
-  .cb-dbl-badge{font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:#FFFBEB;border:1px solid #FCD34D;color:#D97706;opacity:0.6;}
-  .cb-dbl-badge.active{opacity:1;background:#FEF3C7;border-color:#F59E0B;color:#B45309;animation:dblPulse 0.8s ease-in-out infinite;}
+  .cb-dbl-badge{font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:#2a2410;border:1px solid #FCD34D;color:#D97706;opacity:0.6;}
+  .cb-dbl-badge.active{opacity:1;background:#2a2410;border-color:#F59E0B;color:#f0a850;animation:dblPulse 0.8s ease-in-out infinite;}
   @keyframes dblPulse{0%,100%{opacity:1;}50%{opacity:0.6;}}
   /* ══ PAUSE / VOL / BAD-SESSION ══ */
-  .cb-pause-bar{display:none;align-items:center;justify-content:center;padding:6px 10px;background:#FEF2F2;border:1px solid #FCA5A5;margin:6px 10px 0;border-radius:10px;}
+  .cb-pause-bar{display:none;align-items:center;justify-content:center;padding:6px 10px;background:#2a1416;border:1px solid #FCA5A5;margin:6px 10px 0;border-radius:10px;}
   .cb-pause-bar.active{display:flex;}
   .cb-pause-txt{font-size:9px;font-weight:700;color:#DC2626;}
   .cb-vol-bar{display:none;align-items:center;justify-content:center;gap:6px;padding:4px 10px;margin:4px 10px 0;border-radius:10px;font-size:9px;font-weight:700;}
-  .cb-vol-bar.squeeze{display:flex;background:#EFF6FF;border:1px solid #BFDBFE;color:#2563EB;}
-  .cb-vol-bar.explosive{display:flex;background:#FFF7ED;border:1px solid #FDBA74;color:#EA580C;}
-  .cb-bad-sess{display:none;align-items:center;justify-content:center;padding:8px 10px;margin:6px 10px 0;border-radius:10px;font-size:10px;font-weight:800;background:#FEF2F2;border:1.5px solid #FCA5A5;color:#DC2626;}
+  .cb-vol-bar.squeeze{display:flex;background:#15233a;border:1px solid #1e3a5f;color:#2563EB;}
+  .cb-vol-bar.explosive{display:flex;background:#2a1f10;border:1px solid #FDBA74;color:#EA580C;}
+  .cb-bad-sess{display:none;align-items:center;justify-content:center;padding:8px 10px;margin:6px 10px 0;border-radius:10px;font-size:10px;font-weight:800;background:#2a1416;border:1.5px solid #FCA5A5;color:#DC2626;}
   .cb-bad-sess.active{display:flex;animation:cbBadSessPulse 2s infinite;}
   @keyframes cbBadSessPulse{0%,100%{opacity:1;}50%{opacity:0.7;}}
   /* ══ WIN/LOSS STATS ══ */
   .cb-stats-bar{display:flex;gap:5px;padding:8px 10px 0;}
-  .cb-stt{flex:1;background:#fff;border:1px solid #EDE8E2;border-radius:10px;padding:6px 7px;text-align:center;}
-  .cb-stt-lbl{display:block;font-size:7.5px;color:#9CA3AF;margin-bottom:3px;font-weight:500;}
-  .cb-stt-val{font-size:13px;font-weight:700;color:#1A1A1A;}
+  .cb-stt{flex:1;background:#16222e;border:1px solid #243443;border-radius:10px;padding:6px 7px;text-align:center;}
+  .cb-stt-lbl{display:block;font-size:7.5px;color:#7c8d9b;margin-bottom:3px;font-weight:500;}
+  .cb-stt-val{font-size:13px;font-weight:700;color:#eef3f7;}
   .cb-stt-val.g{color:#16A34A;}.cb-stt-val.r{color:#DC2626;}.cb-stt-val.y{color:#D97706;}
   /* ══ SIGNAL BOX ══ */
   .cb-sig-wrap{padding:10px 10px 0;}
-  .cb-sig-box{background:#fff;border:1.5px solid #EDE8E2;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden;}
-  .cb-sig-box.buy{background:#F0FDF4;border-color:#1E3A2F;}
-  .cb-sig-box.sell{background:#FEF2F2;border-color:#DC2626;}
-  .cb-sig-main{font-size:18px;font-weight:800;letter-spacing:0.5px;color:#1A1A1A;}
-  .cb-sig-main.BUY{color:#1E3A2F;}.cb-sig-main.SELL{color:#DC2626;}.cb-sig-main.HOLD{color:#9CA3AF;font-size:15px;font-weight:500;}
-  .cb-sig-sub{font-size:10px;color:#6B7280;}
-  .cb-sig-badge{font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:#F3EDE7;border:1px solid #E5DDD5;color:#6B7280;align-self:flex-start;}
-  .cb-sig-badge.b5{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .cb-sig-badge.b4{background:#F0FDF4;border-color:#BBF7D0;color:#22C55E;}
-  .cb-sig-badge.b3{background:#FFFBEB;border-color:#FCD34D;color:#D97706;}
-  .cb-sig-badge.tve{background:#FFFBEB;border-color:#FCD34D;color:#D97706;}
+  .cb-sig-box{background:#16222e;border:1.5px solid #243443;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden;}
+  .cb-sig-box.buy{background:#0f2a1c;border-color:#46d98e;}
+  .cb-sig-box.sell{background:#2a1416;border-color:#DC2626;}
+  .cb-sig-main{font-size:18px;font-weight:800;letter-spacing:0.5px;color:#eef3f7;}
+  .cb-sig-main.BUY{color:#46d98e;}.cb-sig-main.SELL{color:#DC2626;}.cb-sig-main.HOLD{color:#7c8d9b;font-size:15px;font-weight:500;}
+  .cb-sig-sub{font-size:10px;color:#9fb2c0;}
+  .cb-sig-badge{font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:#1b2a36;border:1px solid #243443;color:#9fb2c0;align-self:flex-start;}
+  .cb-sig-badge.b5{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .cb-sig-badge.b4{background:#0f2a1c;border-color:#BBF7D0;color:#22C55E;}
+  .cb-sig-badge.b3{background:#2a2410;border-color:#FCD34D;color:#D97706;}
+  .cb-sig-badge.tve{background:#2a2410;border-color:#FCD34D;color:#D97706;}
   /* ══ PATTERN PERFORMANCE ══ */
   .cb-ppt-sect{padding:8px 10px 0;}
-  .cb-section-lbl{font-size:9px;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;display:flex;align-items:center;gap:6px;}
-  .cb-section-lbl::after{content:'';flex:1;height:1px;background:#EDE8E2;}
+  .cb-section-lbl{font-size:9px;font-weight:700;color:#9fb2c0;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;display:flex;align-items:center;gap:6px;}
+  .cb-section-lbl::after{content:'';flex:1;height:1px;background:#243443;}
   .cb-ppt-row{display:flex;align-items:center;gap:4px;padding:2px 0;font-size:8px;}
-  .cb-ppt-name{flex:1;color:#6B7280;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cb-ppt-name{flex:1;color:#9fb2c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .cb-ppt-wr{font-family:'SF Mono',ui-monospace,monospace;min-width:28px;text-align:right;font-weight:700;}
   .cb-ppt-wr.good{color:#16A34A;}.cb-ppt-wr.mid{color:#D97706;}.cb-ppt-wr.bad{color:#DC2626;}
   /* ══ CANDLE ROW ══ */
   .cb-candle-sect{padding:10px 10px 0;}
   .cb-candle-row{display:flex;gap:4px;align-items:flex-end;flex-wrap:wrap;min-height:34px;}
   .cb-c{width:26px;height:26px;border-radius:6px;border:1.5px solid;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;}
-  .cb-c.bull{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .cb-c.bear{background:#FEF2F2;border-color:#FCA5A5;color:#DC2626;}
+  .cb-c.bull{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .cb-c.bear{background:#2a1416;border-color:#FCA5A5;color:#DC2626;}
   .cb-c.hist{opacity:0.6;}.cb-c.forming{opacity:0.5;border-style:dashed;animation:formPulse 1.2s ease-in-out infinite;}
   @keyframes formPulse{0%,100%{opacity:0.4;}50%{opacity:0.8;}}
   /* ══ SEPARATOR ══ */
-  .cb-sep{height:1px;background:#EDE8E2;margin:11px 0 0;}
+  .cb-sep{height:1px;background:#243443;margin:11px 0 0;}
   /* ══ AMOUNT ══ */
   .cb-amount-row{display:flex;align-items:center;gap:8px;padding:10px 10px 0;}
-  .cb-amount-lbl{font-size:10px;color:#6B7280;flex-shrink:0;font-weight:600;}
-  .cb-amount-inp{flex:1;background:#fff;border:1px solid #E5DDD5;border-radius:10px;padding:6px 10px;color:#1A1A1A;font-family:inherit;font-size:13px;font-weight:700;text-align:center;outline:none;transition:border-color 0.2s;}
-  .cb-amount-inp:focus{border-color:#1E3A2F;}
-  .cb-demo-badge{font-size:9px;font-weight:700;padding:3px 9px;border-radius:20px;background:#FFFBEB;border:1px solid #FCD34D;color:#D97706;flex-shrink:0;}
-  .cb-demo-badge.real{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
+  .cb-amount-lbl{font-size:10px;color:#9fb2c0;flex-shrink:0;font-weight:600;}
+  .cb-amount-inp{flex:1;background:#16222e;border:1px solid #243443;border-radius:10px;padding:6px 10px;color:#eef3f7;font-family:inherit;font-size:13px;font-weight:700;text-align:center;outline:none;transition:border-color 0.2s;}
+  .cb-amount-inp:focus{border-color:#46d98e;}
+  .cb-demo-badge{font-size:9px;font-weight:700;padding:3px 9px;border-radius:20px;background:#2a2410;border:1px solid #FCD34D;color:#D97706;flex-shrink:0;}
+  .cb-demo-badge.real{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
   /* ══ MANUAL BUY/SELL BUTTONS ══ */
   .cb-manual-row{display:flex;gap:8px;padding:8px 10px;}
   .cb-manual-btn{flex:1;padding:12px 8px;border-radius:50px;border:none;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;text-align:center;transition:all 0.15s ease;touch-action:manipulation;letter-spacing:0.5px;}
@@ -1821,47 +1828,47 @@
   .cb-manual-btn.sell:active{transform:scale(0.95);}
   /* ══ AUTO TOGGLE ══ */
   .cb-auto-row{display:flex;align-items:center;gap:10px;padding:2px 10px 6px;}
-  .cb-auto-lbl{font-size:10.5px;color:#4B5563;flex:1;font-weight:500;}
-  .cb-toggle{appearance:none;width:40px;height:22px;border-radius:11px;cursor:pointer;background:#E5E7EB;border:none;position:relative;transition:all 0.25s;flex-shrink:0;touch-action:manipulation;}
-  .cb-toggle::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.2);transition:all 0.25s ease;}
+  .cb-auto-lbl{font-size:10.5px;color:#9fb2c0;flex:1;font-weight:500;}
+  .cb-toggle{appearance:none;width:40px;height:22px;border-radius:11px;cursor:pointer;background:#243443;border:none;position:relative;transition:all 0.25s;flex-shrink:0;touch-action:manipulation;}
+  .cb-toggle::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#16222e;box-shadow:0 1px 3px rgba(0,0,0,0.2);transition:all 0.25s ease;}
   .cb-toggle:checked{background:#1E3A2F;}
   .cb-toggle:checked::after{transform:translateX(18px);}
-  .cb-auto-badge{font-size:10px;font-weight:700;color:#9CA3AF;min-width:28px;text-align:center;}
+  .cb-auto-badge{font-size:10px;font-weight:700;color:#7c8d9b;min-width:28px;text-align:center;}
   /* ══ TIMING OFFSET ROW ══ */
   .cb-timing-row{display:flex;align-items:center;gap:6px;padding:4px 10px 8px;}
-  .cb-timing-lbl{font-size:10px;color:#6B7280;flex:1;font-weight:600;}
-  .cb-timing-btn{width:26px;height:26px;border-radius:8px;border:1px solid #E5DDD5;background:#fff;color:#374151;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s;flex-shrink:0;touch-action:manipulation;}
-  .cb-timing-btn:hover{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .cb-timing-val{font-size:11px;font-weight:700;color:#1E3A2F;min-width:64px;text-align:center;font-family:'SF Mono',ui-monospace,monospace;background:#F8F5F0;border:1px solid #E5DDD5;border-radius:8px;padding:3px 6px;}
+  .cb-timing-lbl{font-size:10px;color:#9fb2c0;flex:1;font-weight:600;}
+  .cb-timing-btn{width:26px;height:26px;border-radius:8px;border:1px solid #243443;background:#16222e;color:#dfe7ee;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s;flex-shrink:0;touch-action:manipulation;}
+  .cb-timing-btn:hover{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .cb-timing-val{font-size:11px;font-weight:700;color:#46d98e;min-width:64px;text-align:center;font-family:'SF Mono',ui-monospace,monospace;background:#0c151c;border:1px solid #243443;border-radius:8px;padding:3px 6px;}
   .cb-timing-val.neg{color:#DC2626;}
   /* ══ UTILITY BUTTONS ══ */
-  .cb-reset-btn{display:block;margin:0 10px 8px;padding:8px;border-radius:12px;border:1px solid #E5DDD5;background:#fff;color:#6B7280;font-family:inherit;font-size:9.5px;font-weight:600;cursor:pointer;text-align:center;width:calc(100% - 20px);transition:all 0.15s;}
-  .cb-reset-btn:hover{background:#FEF2F2;border-color:#FCA5A5;color:#DC2626;}
+  .cb-reset-btn{display:block;margin:0 10px 8px;padding:8px;border-radius:12px;border:1px solid #243443;background:#16222e;color:#9fb2c0;font-family:inherit;font-size:9.5px;font-weight:600;cursor:pointer;text-align:center;width:calc(100% - 20px);transition:all 0.15s;}
+  .cb-reset-btn:hover{background:#2a1416;border-color:#FCA5A5;color:#DC2626;}
   /* ══ STATUS BAR ══ */
-  #cbStatus{padding:7px 14px 9px;font-size:7.5px;color:#9CA3AF;font-family:'SF Mono',ui-monospace,monospace;border-top:1px solid #EDE8E2;letter-spacing:0.3px;flex-shrink:0;background:#fff;border-radius:0 0 20px 20px;text-align:center;}
+  #cbStatus{padding:7px 14px 9px;font-size:8px;font-weight:700;font-family:'SF Mono',ui-monospace,monospace;border-top:1px solid #243443;letter-spacing:0.5px;flex-shrink:0;background:#0e1a16;border-radius:0 0 20px 20px;text-align:center;background-image:linear-gradient(90deg,#00d264,#3fe0ff,#9b8cff,#00d264);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:cbGradFlow 7s linear infinite;}
   /* ══ LOG FLOAT PANEL ══ */
-  #cbLogFloat{position:fixed;bottom:148px;left:6px;z-index:2147483646;width:360px;background:#fff;border:1px solid #E5DDD5;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.10);display:none;flex-direction:column;overflow:hidden;touch-action:none;max-height:calc(100svh - 160px);}
+  #cbLogFloat{position:fixed;bottom:148px;left:6px;z-index:2147483646;width:360px;background:#16222e;border:1px solid #243443;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.10);display:none;flex-direction:column;overflow:hidden;touch-action:none;max-height:calc(100svh - 160px);}
   #cbLogFloat.open{display:flex;}
   @media(max-width:480px){#cbLogFloat{width:calc(100vw - 12px);left:6px;}}
-  #cbLogHdr{display:flex;align-items:center;gap:6px;padding:9px 10px 8px;border-bottom:1px solid #EDE8E2;cursor:grab;flex-shrink:0;background:#F8F5F0;border-radius:16px 16px 0 0;}
-  .cb-log-title{font-size:10px;font-weight:800;color:#1E3A2F;text-transform:uppercase;letter-spacing:0.8px;flex:1;}
+  #cbLogHdr{display:flex;align-items:center;gap:6px;padding:9px 10px 8px;border-bottom:1px solid #243443;cursor:grab;flex-shrink:0;background:#0c151c;border-radius:16px 16px 0 0;}
+  .cb-log-title{font-size:10px;font-weight:800;color:#46d98e;text-transform:uppercase;letter-spacing:0.8px;flex:1;}
   .cb-log-hdr-btns{display:flex;gap:4px;flex-shrink:0;}
-  .cb-log-hbtn{height:24px;padding:0 9px;border-radius:20px;background:#fff;border:1px solid #E5DDD5;color:#6B7280;cursor:pointer;font-size:9px;font-family:inherit;font-weight:700;display:flex;align-items:center;gap:3px;white-space:nowrap;transition:all 0.15s;}
-  .cb-log-hbtn:hover{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .cb-log-hbtn.copy-ok{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .cb-log-hbtn.pause-on{background:#FFF7ED;border-color:#FDBA74;color:#EA580C;}
-  .cb-log-filters{display:flex;gap:4px;padding:6px 10px;border-bottom:1px solid #EDE8E2;flex-wrap:wrap;flex-shrink:0;background:#fff;}
-  .cb-log-filter{font-size:8px;padding:2px 9px;border-radius:20px;border:1px solid #E5DDD5;background:transparent;color:#9CA3AF;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.15s;}
-  .cb-log-filter.active{border-color:#1E3A2F;color:#1E3A2F;background:#F0FDF4;}
-  .cb-log-filter.f-signal.active{border-color:#86EFAC;color:#16A34A;background:#F0FDF4;}
-  .cb-log-filter.f-error.active{border-color:#FCA5A5;color:#DC2626;background:#FEF2F2;}
-  .cb-log-filter.f-tve.active{border-color:#FCD34D;color:#D97706;background:#FFFBEB;}
-  .cb-log-filter.f-tick.active{border-color:#BFDBFE;color:#2563EB;background:#EFF6FF;}
-  .cb-log-inner{overflow-y:auto;flex:1;padding-bottom:4px;background:#fff;}
+  .cb-log-hbtn{height:24px;padding:0 9px;border-radius:20px;background:#16222e;border:1px solid #243443;color:#9fb2c0;cursor:pointer;font-size:9px;font-family:inherit;font-weight:700;display:flex;align-items:center;gap:3px;white-space:nowrap;transition:all 0.15s;}
+  .cb-log-hbtn:hover{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .cb-log-hbtn.copy-ok{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .cb-log-hbtn.pause-on{background:#2a1f10;border-color:#FDBA74;color:#EA580C;}
+  .cb-log-filters{display:flex;gap:4px;padding:6px 10px;border-bottom:1px solid #243443;flex-wrap:wrap;flex-shrink:0;background:#16222e;}
+  .cb-log-filter{font-size:8px;padding:2px 9px;border-radius:20px;border:1px solid #243443;background:transparent;color:#7c8d9b;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.15s;}
+  .cb-log-filter.active{border-color:#46d98e;color:#46d98e;background:#0f2a1c;}
+  .cb-log-filter.f-signal.active{border-color:#86EFAC;color:#16A34A;background:#0f2a1c;}
+  .cb-log-filter.f-error.active{border-color:#FCA5A5;color:#DC2626;background:#2a1416;}
+  .cb-log-filter.f-tve.active{border-color:#FCD34D;color:#D97706;background:#2a2410;}
+  .cb-log-filter.f-tick.active{border-color:#1e3a5f;color:#2563EB;background:#15233a;}
+  .cb-log-inner{overflow-y:auto;flex:1;padding-bottom:4px;background:#16222e;}
   .cb-log-inner::-webkit-scrollbar{width:3px;}
-  .cb-log-inner::-webkit-scrollbar-thumb{background:#D1C8BE;border-radius:2px;}
+  .cb-log-inner::-webkit-scrollbar-thumb{background:#33485a;border-radius:2px;}
   .cb-log-line{font-size:9px;line-height:1.5;display:flex;flex-direction:column;padding:4px 10px;border-bottom:1px solid #F5F0EB;border-right:2px solid transparent;transition:background 0.1s;}
-  .cb-log-line:hover{background:#F8F5F0;}
+  .cb-log-line:hover{background:#0c151c;}
   .cb-log-line.new{animation:logSlide 0.3s ease-out;}
   @keyframes logSlide{from{opacity:0;transform:translateX(-8px);}to{opacity:1;transform:translateX(0);}}
   .cb-log-line.t-signal{border-right-color:#16A34A;}
@@ -1870,62 +1877,62 @@
   .cb-log-line.t-tick{border-right-color:#3B82F6;}
   .cb-log-line.t-asset{border-right-color:#D97706;}
   .cb-log-row1{display:flex;align-items:baseline;gap:5px;}
-  .cb-log-seq{color:#D1C8BE;font-family:'SF Mono',ui-monospace,monospace;font-size:7px;min-width:26px;flex-shrink:0;}
-  .cb-log-t{color:#9CA3AF;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0;font-size:7.5px;}
-  .cb-log-m{color:#374151;font-weight:500;word-break:break-word;white-space:pre-wrap;flex:1;}
+  .cb-log-seq{color:#33485a;font-family:'SF Mono',ui-monospace,monospace;font-size:7px;min-width:26px;flex-shrink:0;}
+  .cb-log-t{color:#7c8d9b;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0;font-size:7.5px;}
+  .cb-log-m{color:#dfe7ee;font-weight:500;word-break:break-word;white-space:pre-wrap;flex:1;}
   .cb-log-m.signal{color:#16A34A;font-weight:700;}
   .cb-log-m.error{color:#DC2626;font-weight:600;}
   .cb-log-m.tve{color:#D97706;font-weight:600;}
   .cb-log-m.tick{color:#3B82F6;}
   .cb-log-m.asset{color:#D97706;font-weight:700;}
-  .cb-log-m.info{color:#6B7280;}
-  .cb-log-extra{font-size:7.5px;color:#9CA3AF;font-family:'SF Mono',ui-monospace,monospace;padding-right:31px;word-break:break-all;margin-top:1px;}
+  .cb-log-m.info{color:#9fb2c0;}
+  .cb-log-extra{font-size:7.5px;color:#7c8d9b;font-family:'SF Mono',ui-monospace,monospace;padding-right:31px;word-break:break-all;margin-top:1px;}
   /* ══ LOG TOGGLE BTN ══ */
-  #cbLogToggle{position:fixed;bottom:100px;left:6px;z-index:2147483646;padding:6px 12px;border-radius:20px;background:#fff;border:1px solid #D1E8DC;color:#1E3A2F;font-family:'IBM Plex Sans Arabic',-apple-system,sans-serif;font-size:9px;font-weight:700;cursor:pointer;touch-action:manipulation;display:none;align-items:center;gap:5px;box-shadow:0 2px 8px rgba(30,58,47,0.10);}
+  #cbLogToggle{position:fixed;bottom:100px;left:6px;z-index:2147483646;padding:6px 12px;border-radius:20px;background:#16222e;border:1px solid #243443;color:#46d98e;font-family:'IBM Plex Sans Arabic',-apple-system,sans-serif;font-size:9px;font-weight:700;cursor:pointer;touch-action:manipulation;display:none;align-items:center;gap:5px;box-shadow:0 2px 8px rgba(30,58,47,0.10);}
   #cbLogToggle.visible{display:flex;}
-  #cbLogCount{background:#F0FDF4;color:#16A34A;border-radius:10px;padding:1px 6px;font-size:7.5px;min-width:16px;text-align:center;border:1px solid #86EFAC;}
+  #cbLogCount{background:#0f2a1c;color:#16A34A;border-radius:10px;padding:1px 6px;font-size:7.5px;min-width:16px;text-align:center;border:1px solid #86EFAC;}
   /* ══ SPY PANEL ══ */
-  #cbSpyPanel{position:fixed;bottom:80px;right:8px;width:340px;max-width:calc(100vw - 16px);max-height:calc(100svh - 100px);background:#fff;border:1.5px solid #E5DDD5;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.10);display:none;flex-direction:column;overflow:hidden;z-index:2147483645;touch-action:none;direction:ltr;}
+  #cbSpyPanel{position:fixed;bottom:80px;right:8px;width:340px;max-width:calc(100vw - 16px);max-height:calc(100svh - 100px);background:#16222e;border:1.5px solid #243443;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.10);display:none;flex-direction:column;overflow:hidden;z-index:2147483645;touch-action:none;direction:ltr;}
   #cbSpyPanel.open{display:flex;}
   @media(max-width:480px){#cbSpyPanel{width:calc(100vw - 16px);right:8px;}}
-  #cbSpyHdr{display:flex;align-items:center;gap:7px;padding:10px 12px 9px;border-bottom:1px solid #EDE8E2;cursor:grab;background:#F8F5F0;flex-shrink:0;border-radius:16px 16px 0 0;}
+  #cbSpyHdr{display:flex;align-items:center;gap:7px;padding:10px 12px 9px;border-bottom:1px solid #243443;cursor:grab;background:#0c151c;flex-shrink:0;border-radius:16px 16px 0 0;}
   #cbSpyHdr:active{cursor:grabbing;}
-  .spy-title{font-size:10px;font-weight:800;color:#1E3A2F;letter-spacing:0.6px;flex:1;}
-  .spy-badge{font-size:8px;font-weight:700;padding:2px 8px;border-radius:10px;background:#F0FDF4;border:1px solid #86EFAC;color:#16A34A;}
-  .spy-badge.ai{background:#F0FDF4;border-color:#4ADE80;color:#15803D;}
+  .spy-title{font-size:10px;font-weight:800;color:#46d98e;letter-spacing:0.6px;flex:1;}
+  .spy-badge{font-size:8px;font-weight:700;padding:2px 8px;border-radius:10px;background:#0f2a1c;border:1px solid #86EFAC;color:#16A34A;}
+  .spy-badge.ai{background:#0f2a1c;border-color:#4ADE80;color:#46d98e;}
   .spy-hdr-btns{display:flex;gap:4px;flex-shrink:0;}
-  .spy-btn{padding:3px 9px;border-radius:20px;border:1px solid #E5DDD5;background:#fff;color:#6B7280;font-size:8.5px;font-weight:700;cursor:pointer;font-family:inherit;transition:all 0.15s;}
-  .spy-btn:hover{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .spy-btn.copy-ok{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  #cbSpyFilters{display:flex;gap:4px;padding:7px 10px 5px;flex-shrink:0;border-bottom:1px solid #EDE8E2;overflow-x:auto;background:#fff;}
-  .spy-filter{padding:2px 11px;border-radius:20px;border:1px solid #E5DDD5;background:transparent;color:#9CA3AF;font-size:8px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;transition:all 0.15s;}
-  .spy-filter.active{background:#F0FDF4;border-color:#1E3A2F;color:#1E3A2F;}
+  .spy-btn{padding:3px 9px;border-radius:20px;border:1px solid #243443;background:#16222e;color:#9fb2c0;font-size:8.5px;font-weight:700;cursor:pointer;font-family:inherit;transition:all 0.15s;}
+  .spy-btn:hover{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .spy-btn.copy-ok{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  #cbSpyFilters{display:flex;gap:4px;padding:7px 10px 5px;flex-shrink:0;border-bottom:1px solid #243443;overflow-x:auto;background:#16222e;}
+  .spy-filter{padding:2px 11px;border-radius:20px;border:1px solid #243443;background:transparent;color:#7c8d9b;font-size:8px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;transition:all 0.15s;}
+  .spy-filter.active{background:#0f2a1c;border-color:#46d98e;color:#46d98e;}
   #cbSpyScroll{overflow-y:auto;flex:1;padding:6px 0;}
   #cbSpyScroll::-webkit-scrollbar{width:3px;}
-  #cbSpyScroll::-webkit-scrollbar-thumb{background:#D1C8BE;border-radius:3px;}
+  #cbSpyScroll::-webkit-scrollbar-thumb{background:#33485a;border-radius:3px;}
   .spy-entry{padding:6px 10px;border-bottom:1px solid #F5F0EB;font-family:'SF Mono',ui-monospace,monospace;}
-  .spy-entry.ai-signal{background:#F0FDF4;border-right:3px solid #16A34A;}
-  .spy-entry.uid-low{background:#FFFBEB;border-right:3px solid #D97706;}
+  .spy-entry.ai-signal{background:#0f2a1c;border-right:3px solid #16A34A;}
+  .spy-entry.uid-low{background:#2a2410;border-right:3px solid #D97706;}
   .spy-entry-hdr{display:flex;align-items:center;gap:5px;margin-bottom:3px;}
-  .spy-ev-name{font-size:9px;font-weight:700;color:#1E3A2F;}
-  .spy-ev-name.ai{color:#15803D;}
-  .spy-ev-ts{font-size:7.5px;color:#9CA3AF;}
-  .spy-ev-src{font-size:7px;padding:1px 5px;border-radius:5px;border:1px solid #E5DDD5;color:#6B7280;}
-  .spy-ev-uid{font-size:8px;font-weight:800;padding:1px 6px;border-radius:6px;background:#FFFBEB;border:1px solid #FCD34D;color:#D97706;}
-  .spy-ev-body{font-size:7.5px;color:#374151;white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;line-height:1.4;}
+  .spy-ev-name{font-size:9px;font-weight:700;color:#46d98e;}
+  .spy-ev-name.ai{color:#46d98e;}
+  .spy-ev-ts{font-size:7.5px;color:#7c8d9b;}
+  .spy-ev-src{font-size:7px;padding:1px 5px;border-radius:5px;border:1px solid #243443;color:#9fb2c0;}
+  .spy-ev-uid{font-size:8px;font-weight:800;padding:1px 6px;border-radius:6px;background:#2a2410;border:1px solid #FCD34D;color:#D97706;}
+  .spy-ev-body{font-size:7.5px;color:#dfe7ee;white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;line-height:1.4;}
   .spy-ev-body::-webkit-scrollbar{width:2px;}
-  .spy-ev-body::-webkit-scrollbar-thumb{background:#D1C8BE;}
-  .spy-ev-copy{font-size:7px;color:#9CA3AF;cursor:pointer;margin-top:2px;display:inline-block;}
-  .spy-ev-copy:hover{color:#1E3A2F;}
-  #cbSpyStats{padding:6px 10px;border-top:1px solid #EDE8E2;font-size:8px;color:#6B7280;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0;background:#F8F5F0;}
+  .spy-ev-body::-webkit-scrollbar-thumb{background:#33485a;}
+  .spy-ev-copy{font-size:7px;color:#7c8d9b;cursor:pointer;margin-top:2px;display:inline-block;}
+  .spy-ev-copy:hover{color:#46d98e;}
+  #cbSpyStats{padding:6px 10px;border-top:1px solid #243443;font-size:8px;color:#9fb2c0;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0;background:#0c151c;}
   /* ══ SPY BTN ══ */
-  #cbSpyBtn{position:fixed;bottom:100px;right:8px;z-index:2147483646;padding:6px 12px;border-radius:20px;background:#fff;border:1px solid #D1E8DC;color:#1E3A2F;font-family:'IBM Plex Sans Arabic',-apple-system,sans-serif;font-size:9px;font-weight:700;cursor:pointer;touch-action:manipulation;display:none;align-items:center;gap:5px;box-shadow:0 2px 8px rgba(30,58,47,0.10);}
+  #cbSpyBtn{position:fixed;bottom:100px;right:8px;z-index:2147483646;padding:6px 12px;border-radius:20px;background:#16222e;border:1px solid #243443;color:#46d98e;font-family:'IBM Plex Sans Arabic',-apple-system,sans-serif;font-size:9px;font-weight:700;cursor:pointer;touch-action:manipulation;display:none;align-items:center;gap:5px;box-shadow:0 2px 8px rgba(30,58,47,0.10);}
   #cbSpyBtn.visible{display:flex;}
-  #cbSpyCount{background:#F0FDF4;color:#16A34A;border-radius:10px;padding:1px 6px;font-size:7.5px;min-width:16px;text-align:center;border:1px solid #86EFAC;}
+  #cbSpyCount{background:#0f2a1c;color:#16A34A;border-radius:10px;padding:1px 6px;font-size:7.5px;min-width:16px;text-align:center;border:1px solid #86EFAC;}
   /* ══ ANALYSIS PANEL ══ */
   #cbAnalBtn{position:fixed;bottom:132px;right:8px;z-index:2147483646;padding:6px 12px;border-radius:20px;background:#1E3A2F;border:1px solid #2d5c45;color:#fff;font-family:'IBM Plex Sans Arabic',-apple-system,sans-serif;font-size:9px;font-weight:700;cursor:pointer;touch-action:manipulation;display:flex;align-items:center;gap:5px;box-shadow:0 2px 8px rgba(30,58,47,0.25);}
   #cbAnalCount{background:rgba(255,255,255,0.2);color:#fff;border-radius:10px;padding:1px 6px;font-size:7.5px;min-width:16px;text-align:center;}
-  #cbAnalPanel{position:fixed;bottom:80px;right:8px;width:380px;max-width:calc(100vw - 16px);max-height:calc(100svh - 100px);background:#fff;border:1.5px solid #D1E8DC;border-radius:16px;box-shadow:0 8px 32px rgba(30,58,47,0.15);display:none;flex-direction:column;overflow:hidden;z-index:2147483645;touch-action:none;direction:rtl;}
+  #cbAnalPanel{position:fixed;bottom:80px;right:8px;width:380px;max-width:calc(100vw - 16px);max-height:calc(100svh - 100px);background:#16222e;border:1.5px solid #243443;border-radius:16px;box-shadow:0 8px 32px rgba(30,58,47,0.15);display:none;flex-direction:column;overflow:hidden;z-index:2147483645;touch-action:none;direction:rtl;}
   #cbAnalPanel.open{display:flex;}
   @media(max-width:480px){#cbAnalPanel{width:calc(100vw - 16px);right:8px;}}
   #cbAnalHdr{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#1E3A2F;gap:6px;flex-shrink:0;}
@@ -1934,21 +1941,21 @@
   .cb-anal-hbtn{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);color:#fff;border-radius:6px;padding:3px 7px;font-size:8px;cursor:pointer;white-space:nowrap;font-family:inherit;}
   .cb-anal-hbtn:hover{background:rgba(255,255,255,0.28);}
   .cb-anal-hbtn.ok{background:#16A34A;border-color:#16A34A;}
-  #cbAnalSummary{padding:8px 10px;background:#F0FDF4;border-bottom:1px solid #D1FAE5;font-size:9px;color:#065F46;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0;line-height:1.6;}
-  .cb-anal-tabs{display:flex;gap:0;border-bottom:1px solid #E5DDD5;flex-shrink:0;background:#F8F5F0;}
-  .cb-anal-tab{flex:1;padding:6px 4px;font-size:9px;font-weight:600;border:none;background:transparent;color:#6B7280;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;}
-  .cb-anal-tab.active{color:#1E3A2F;border-bottom-color:#1E3A2F;background:#fff;}
+  #cbAnalSummary{padding:8px 10px;background:#0f2a1c;border-bottom:1px solid #D1FAE5;font-size:9px;color:#065F46;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0;line-height:1.6;}
+  .cb-anal-tabs{display:flex;gap:0;border-bottom:1px solid #243443;flex-shrink:0;background:#0c151c;}
+  .cb-anal-tab{flex:1;padding:6px 4px;font-size:9px;font-weight:600;border:none;background:transparent;color:#9fb2c0;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;}
+  .cb-anal-tab.active{color:#46d98e;border-bottom-color:#46d98e;background:#16222e;}
   #cbAnalBody{flex:1;overflow-y:auto;font-size:8px;font-family:'SF Mono',ui-monospace,monospace;}
   .cb-anal-table{width:100%;border-collapse:collapse;}
-  .cb-anal-table th{position:sticky;top:0;background:#F8F5F0;color:#374151;font-size:7.5px;font-weight:700;padding:4px 5px;border-bottom:1px solid #E5DDD5;text-align:center;white-space:nowrap;}
-  .cb-anal-table td{padding:4px 5px;border-bottom:1px solid #F3EEE8;color:#374151;text-align:center;white-space:nowrap;cursor:pointer;}
-  .cb-anal-table tr:hover td{background:#F0FDF4;}
-  .cb-anal-table tr.win td{background:#F0FDF4;}
-  .cb-anal-table tr.loss td{background:#FFF1F2;}
+  .cb-anal-table th{position:sticky;top:0;background:#0c151c;color:#dfe7ee;font-size:7.5px;font-weight:700;padding:4px 5px;border-bottom:1px solid #243443;text-align:center;white-space:nowrap;}
+  .cb-anal-table td{padding:4px 5px;border-bottom:1px solid #F3EEE8;color:#dfe7ee;text-align:center;white-space:nowrap;cursor:pointer;}
+  .cb-anal-table tr:hover td{background:#0f2a1c;}
+  .cb-anal-table tr.win td{background:#0f2a1c;}
+  .cb-anal-table tr.loss td{background:#2a1416;}
   .cb-anal-table td.up{color:#16A34A;font-weight:700;}
   .cb-anal-table td.dn{color:#DC2626;font-weight:700;}
   .cb-anal-table td.adj{color:#D97706;font-weight:700;}
-  .cb-anal-empty{padding:20px;text-align:center;color:#9CA3AF;font-size:9px;}
+  .cb-anal-empty{padding:20px;text-align:center;color:#7c8d9b;font-size:9px;}
   `;
 
   const HUD_HTML = `
@@ -1960,7 +1967,7 @@
   <div id="cbPanel">
     <div class="cb-hdr" id="cbDragHdr">
       <div class="cb-hdr-dot" id="cbHdrDot"></div>
-      <span class="cb-ttl" id="cbMainTitle">⚡ V12.5 SUPREME</span>
+      <span class="cb-ttl" id="cbMainTitle">⚡ QUANTUM PRO ⚡</span>
       <div class="cb-hdr-actions">
         <button class="cb-icon-btn" id="cbMinimize">−</button>
         <button class="cb-icon-btn" id="cbClose">✕</button>
@@ -2041,17 +2048,13 @@
       <div class="cb-conf-bar">
         <span class="cb-conf-lbl">🎯 توافق</span>
         <span class="cb-conf-score" id="cbConfScore">–</span>
-        <div class="cb-conf-track"><div class="cb-conf-fill" id="cbConfFill" style="width:0%;background:#E5DDD5;"></div></div>
+        <div class="cb-conf-track"><div class="cb-conf-fill" id="cbConfFill" style="width:0%;background:#243443;"></div></div>
         <span class="cb-ind-badge" id="cbDblBadge" style="font-size:9px;color:#D97706;opacity:0.5;">DBL–</span>
       </div>
       <div class="cb-conf-detail" id="cbConfDetail">–</div>
 
       <div class="cb-pause-bar" id="cbPauseBar">
         <span class="cb-pause-txt" id="cbPauseTxt">⛔ وقف مؤقت بسبب الخسائر</span>
-      </div>
-
-      <div class="cb-vol-bar" id="cbVolBar">
-        <span id="cbVolState">NORMAL</span>
       </div>
 
       <div class="cb-bad-sess" id="cbBadSession">
@@ -2065,8 +2068,7 @@
         <div class="cb-stt"><span class="cb-stt-lbl">🔥🔥 مزدوج</span><span class="cb-stt-val y" id="cbDoubles">0</span></div>
       </div>
       <div class="cb-stats-bar" style="padding-top:4px;">
-        <div class="cb-stt" style="flex:2;"><span class="cb-stt-lbl">نقطة التعادل (Breakeven)</span><span class="cb-stt-val y" id="cbBreakeven">–</span></div>
-        <div class="cb-stt" style="flex:1;"><span class="cb-stt-lbl">التقلب</span><span class="cb-stt-val y" id="cbVolMini">–</span></div>
+        <div class="cb-stt" style="flex:1;"><span class="cb-stt-lbl">نقطة التعادل (Breakeven)</span><span class="cb-stt-val y" id="cbBreakeven">–</span></div>
       </div>
 
       <div class="cb-sig-wrap">
@@ -2103,7 +2105,7 @@
         <span class="cb-auto-badge" id="cbAutoBadge">OFF</span>
       </div>
       <div class="cb-conf-slider-row" style="display:flex;align-items:center;gap:6px;padding:4px 10px;">
-        <span style="font-size:10px;color:#9CA3AF;min-width:58px;">🎯 ثقة ≥</span>
+        <span style="font-size:10px;color:#7c8d9b;min-width:58px;">🎯 ثقة ≥</span>
         <input type="range" id="cbConfSlider" min="50" max="95" value="75" style="flex:1;accent-color:#00d264;height:4px;">
         <span style="font-size:11px;font-weight:700;color:#00d264;min-width:28px;text-align:right;" id="cbConfSliderVal">75%</span>
       </div>
@@ -2115,16 +2117,11 @@
       </div>
       <div style="display:flex;gap:6px;margin:0 10px 8px;">
         <button class="cb-reset-btn" id="cbResetStats" style="margin:0;flex:1;">إعادة تعيين</button>
-        <button class="cb-reset-btn" id="cbCopyStats"  style="margin:0;flex:1;border-color:#BFDBFE;color:#2563EB;">📋 نسخ</button>
+        <button class="cb-reset-btn" id="cbCopyStats"  style="margin:0;flex:1;border-color:#1e3a5f;color:#2563EB;">📋 نسخ</button>
       </div>
-      <div style="margin:0 10px 4px;font-size:9px;color:#9CA3AF;text-align:right;" id="cbDbStats">🗄 جاري تحميل إحصاءات قاعدة البيانات…</div>
-      <div style="display:flex;gap:6px;margin:0 10px 8px;align-items:center;">
-        <input type="password" id="cbGhToken" placeholder="ghp_... GitHub Token" style="flex:1;background:#fff;border:1px solid #E5DDD5;border-radius:8px;color:#374151;font-size:10px;padding:5px 8px;outline:none;">
-        <button class="cb-reset-btn" id="cbGhSync" style="margin:0;flex:0 0 auto;border-color:#86EFAC;color:#16A34A;">☁️ مزامنة</button>
-      </div>
-      <div style="margin:0 10px 6px;font-size:9px;color:#16A34A;text-align:right;" id="cbGhStatus">☁️ لم يتم المزامنة بعد</div>
+      <div style="margin:0 10px 8px;font-size:9px;color:#7c8d9b;text-align:right;" id="cbDbStats">🗄 جاري تحميل إحصاءات قاعدة البيانات…</div>
     </div>
-    <div id="cbStatus">v13.0 | OBI+LAD+LSTM+RL | IMDB: 70%→×2 | 85%→×3 | 94%→×4</div>
+    <div id="cbStatus">◆ QUANTUM ENGINE ◆ ORACLE • ETE • LAB ◆ 70%→×2 · 85%→×3 · 94%→×4 ◆</div>
   </div>
   <div id="cbLogFloat">
     <div id="cbLogHdr">
@@ -2170,9 +2167,8 @@
     <div id="cbSpyStats">إدخالات: 0 | AI: 0 | WR-10s: – | WR-30s: –</div>
   </div>
 
-  <!-- ═══ HYBRID ANALYSIS PANEL ═══ -->
-  <button id="cbAnalBtn" onclick="window._cbToggleAnal&&window._cbToggleAnal()">📊 تحليل <span id="cbAnalCount">0</span></button>
-  <div id="cbAnalPanel">
+  <!-- ═══ HYBRID ANALYSIS PANEL (زر مخفي — احتفظنا باللوحة دون الزر) ═══ -->
+  <div id="cbAnalPanel" style="display:none;">
     <div id="cbAnalHdr">
       <span class="cb-anal-title">📊 تحليل ETC — سجل الصفقات التفصيلي</span>
       <div class="cb-anal-hdr-btns">
@@ -2832,6 +2828,7 @@
     const changed = !Number.isFinite(tradeAmount) || Math.abs((tradeAmount || 0) - safe) > 1e-9;
     tradeAmount = safe;
     _manualAmountOverride = true;
+    try { W.localStorage.setItem('cb_amount', String(safe)); } catch(_) {}  // [V22] حفظ المبلغ — يتذكّره بعد التحديث
     _rebuildPayloadCache();
     _updateKellyDisplay();
     if (changed) addLog('💵 مبلغ يدوي: $' + tradeAmount.toFixed(2), 'info');
@@ -2927,6 +2924,7 @@
     const badge  = W.document.getElementById('cbAutoBadge');
     const reset  = W.document.getElementById('cbResetStats');
     const amtInp = W.document.getElementById('cbAmountInp');
+    if (amtInp) amtInp.value = tradeAmount;   // [V22] أظهر آخر مبلغ محفوظ
     const manBuy = W.document.getElementById('cbManualBuy');
     const manSel = W.document.getElementById('cbManualSell');
     const dragHdr= W.document.getElementById('cbDragHdr');
@@ -2942,7 +2940,7 @@
       if (_isIslamicAccount) badges.push('🕌');
       if (_aiTradingMode)    badges.push('🤖');
       if (_platformId === 9) badges.push('📱');
-      titleEl.textContent = '⚡ V13 QUANTUM' + (badges.length ? ' ' + badges.join('') : '');
+      titleEl.textContent = '⚡ QUANTUM PRO ⚡' + (badges.length ? ' ' + badges.join('') : '');
     }
 
     // ✅ v10.4 FIX#5: بعد 3 ثوانٍ اجعل المقبس جاهزاً حتى لو لم يأتِ successauth
@@ -4581,13 +4579,6 @@
           addLog('🔮 [ORACLE-OK] ' + signal.direction + ' مؤكَّد — ' + _orc.reason + (_orc.strength ? ' قوة:' + _orc.strength : '') + ' | قوة المنصة الآن: ' + (DualWSSManager.platformStrength ? DualWSSManager.platformStrength(signal.asset) : '?'), 'info');
         }
 
-        // ✅ [V21] قاعدة مدعومة ببيانات 3 جلسات: الصفقات بلا أي دعم أوراكل (لا شات يؤكّد
-        //   ولا قوة منصة ≥3) هي ملف الخسارة في السوق المتذبذب. نشترط ثقة نمط أعلى لها.
-        if (CFG.NO_ORACLE_MIN_CONF > 0 && !_oracleConfirmed && signal.confidence < CFG.NO_ORACLE_MIN_CONF) {
-          addLog('🛡️ [NO-ORACLE] ' + signal.direction + ' مرفوض — بلا دعم أوراكل وثقة ' + signal.confidence + '% < ' + CFG.NO_ORACLE_MIN_CONF + '% | نمط: ' + signal.pattern, 'info');
-          return;
-        }
-
         // ✅ [V14.6] قاعدة مدعومة بالبيانات: المعاكس للاتجاه + بلا تأكيد منصة = ملف الخسارة.
         //   (كل خسائر سجلك كانت كذلك؛ وكل صفقة أكّدها الأوراكل ربحت). نشترط ثقة عالية هنا.
         if (CFG.COUNTERTREND_NEEDS_ORACLE && _counterTrend && !_oracleConfirmed &&
@@ -4713,8 +4704,8 @@
       if (!CFG.PATTERN_REARM_ENABLED) return false;
       const key = signal.pattern + ':' + signal.asset;
       const now = Date.now();
-      // نافذة إعادة التسليح: الأكبر من (مضاعف × مدة الشمعة) أو الحد الأدنى
-      const frameBased = (candlePeriod > 0 ? candlePeriod : 6) * 1000 * (CFG.PATTERN_REARM_FRAME_MULT || 1);
+      // نافذة إعادة التسليح: الأكبر من (2× مدة الشمعة) أو (الحد الأدنى 15 ثانية)
+      const frameBased = (candlePeriod > 0 ? candlePeriod : 15) * 1000 * 2;
       const rearmWindow = Math.max(CFG.PATTERN_REARM_MIN_MS, frameBased);
       if (_lastExecutedPattern === key && (now - _lastExecutedPatternTs) < rearmWindow) {
         return true; // لا يزال في فترة الحماية
@@ -5010,10 +5001,24 @@
       _lastExecutedPattern = signal.pattern + ':' + signal.asset;
       _lastExecutedPatternTs = _now;
 
-      // حساب التأخير الاصطناعي
+      // [V22] الصفقات المزدوجة — ضاعف المبلغ حسب قوة الإشارة (70%→×2، 85%→×3، 94%→×4)
+      let _execAmount = tradeAmount;
+      if (CFG.DOUBLE_ON_STRONG) {
+        const _c = signal.confidence || 0;
+        const _mult = _c >= CFG.IMDB_TIER_QUAD ? 4 : _c >= CFG.IMDB_TIER_TRIPLE ? 3 : _c >= CFG.IMDB_TIER_DOUBLE ? 2 : 1;
+        if (_mult > 1) {
+          _execAmount = _safeAmount(tradeAmount * Math.min(_mult, CFG.DOUBLE_MAX_MULT));
+          _lastTradeWasDouble = true;
+          STATS.doubles = (STATS.doubles || 0) + 1;
+          addLog('🔥 [DOUBLE] إشارة قوية ' + _c + '% → ×' + _mult + ' = $' + _execAmount, 'signal');
+        }
+      }
+
+      // حساب التأخير الاصطناعي + [V22] إزاحة التوقيت اليدوية (زر ⚡ توقيت التنفيذ)
+      //   _timingOffset سالب = دخول أبكر | موجب = أبطأ. الآن موصول فعلياً.
       const synthDelay = _getSyntheticDelay();
       const jitter = Math.round((Math.random() - 0.5) * 2 * CFG.DUAL_WSS_JITTER_MS);
-      const totalDelay = Math.max(0, synthDelay + jitter);
+      const totalDelay = Math.max(0, synthDelay + jitter + _timingOffset);
 
       if (totalDelay > 0) {
         addLog('🔮 [DELAY] تأخير اصطناعي: ' + totalDelay + 'مللي ثانية (فجوة: ' +
@@ -5021,10 +5026,10 @@
         if (_queueTimer) clearTimeout(_queueTimer);
         _queueTimer = setTimeout(() => {
           _queueTimer = null;
-          _timedExecute(signal.direction, signal.asset, tradeAmount, signal.confidence);
+          _timedExecute(signal.direction, signal.asset, _execAmount);
         }, totalDelay);
       } else {
-        _timedExecute(signal.direction, signal.asset, tradeAmount, signal.confidence);
+        _timedExecute(signal.direction, signal.asset, _execAmount);
       }
     }
 
@@ -5053,34 +5058,9 @@
       const ms = Math.round(durSec * 1000 * CFG.ETE_WAIT_FRAC);
       return Math.max(CFG.ETE_WAIT_MIN_MS, Math.min(CFG.ETE_WAIT_MAX_MS, ms));
     }
-    function _timedExecute(direction, asset, amount, confidence) {
+    function _timedExecute(direction, asset, amount) {
       if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount); return; }
       if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
-      const a = normalizeAsset(asset);
-      const cs = _chatSig[a];
-      const chatConfirm = cs && cs.dir === direction;
-      const chatContra  = cs && cs.dir !== direction;
-      const plat = platformStrength(a);
-
-      // ① حماية مبنية على البيانات (تسبق الدخول الفوري): عكس الشات + بلا دعم منصة +
-      //    زخم ضعيف = مصدر معظم الخسائر (حتى لو الثقة عالية — مثل #0263 BUY 95% خسر)
-      if (CFG.ETE_BLOCK_WEAK_COUNTER_CHAT && chatContra && plat < 3) {
-        const sl = OracleLab.microSlope(a, CFG.ETE_SLOPE_MS);
-        const strong = sl && ((direction === 'BUY'  && sl.rel >=  CFG.ETE_STRONG_REL) ||
-                              (direction === 'SELL' && sl.rel <= -CFG.ETE_STRONG_REL));
-        if (!strong) {
-          addLog('🚫 [ENTRY] إلغاء — عكس الشات (' + cs.dir + ') بلا دعم منصة وزخم ضعيف | ' + direction, 'info');
-          return;
-        }
-      }
-
-      // ② دخول فوري للقناعة العالية (الشات يؤكّد / قوة منصة قصوى / ثقة عالية)
-      //    يعالج «الدخول المتأخر» — الإشارات القوية لا تنتظر. (شات-تأكيد = 100% بالبيانات)
-      if (chatConfirm || plat >= 4 || (confidence || 0) >= CFG.ETE_INSTANT_CONF) {
-        addLog('🎯 [ENTRY] دخول فوري — قناعة عالية (' + (chatConfirm ? 'شات✓' : plat >= 4 ? 'منصة:4' : 'ثقة:' + confidence + '%') + ') ' + direction, 'signal');
-        _executeDualTrade(direction, asset, amount); return;
-      }
-
       const maxWait = _eteMaxWait();
       const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 5));
       const deadline = Date.now() + maxWait;
