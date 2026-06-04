@@ -147,7 +147,7 @@
     MAX_CONSEC_SAME_DIR     : 2,          // حد الصفقات المتتالية في نفس الاتجاه (2 = أقصى صفقتين BUY أو SELL متتاليتين)
     CONSEC_CONF_PENALTY     : 20,         // خصم من الثقة لكل صفقة متتالية في نفس الاتجاه (20% → 80% تصبح 60%)
     PATTERN_REARM_ENABLED   : true,       // حاجز إعادة تسليح النمط — نفس النمط لا يكرر خلال فترة الحماية
-    PATTERN_REARM_MIN_MS    : 5000,       // [V24-FAST] 5ث (كان 10) — إعادة تسليح أسرع
+    PATTERN_REARM_MIN_MS    : 10000,      // [DISCIPLINE] انضباط 17/5: 10ث — تقليل التداول المتكرر للنمط
     MAX_TRADES_PER_WINDOW   : 12,         // ✅ [V14.5] سقف الصفقات/دقيقة (12 بدل 4 — تسريع السكالبينغ)
     TRADE_WINDOW_MS         : 60000,      // نافذة العد: 60 ثانية
 
@@ -168,6 +168,10 @@
     COUNTERTREND_MIN_CONF    : 90,         // عتبة الثقة لو فعّلته يدوياً
     EXHAUSTION_COOLDOWN_MS  : 4000,        // ✅ [V13.6] بعد الاستنفاد امنع اتجاه الاستمرار 4ث (كان 9 — أسرع)
     MIN_TRADE_SEC           : 3,           // ✅ [V14.2] حد أدنى لمدة الصفقة — المنصة ترفض <3ث (IncorrectExpTime)
+    // ─── [FIX-B] تثبيت مدة السكالبينغ — يمنع time:60 الشاذ المرصود في السجل ──
+    SCALP_FIXED_SEC         : 3,           // ✅ [FIX-B] مدة ثابتة لكل صفقة سكالبينغ
+    SCALP_MAX_SEC           : 5,           // ✅ [FIX-B] أي مدة أكبر تُقصّ — لا صفقات 60ث على إشارة 3ث
+    SCALP_FIXED_ENABLED     : true,        // ✅ [FIX-B] فعّل تثبيت المدة
     ADAPTIVE_CONF_ENABLED   : true,        // ✅ ثقة تكيفية — رفع العتبة للأنماط الخاسرة حياً
     ADAPTIVE_MIN_SAMPLES    : 6,           // الحد الأدنى من الصفقات قبل تفعيل التكيّف لكل نمط
     ADAPTIVE_CONF_PER_LOSS  : 6,           // رفع عتبة الثقة المطلوبة % لكل خسارة صافية للنمط
@@ -181,6 +185,9 @@
     // ─── [V14 — إصلاح الأوراكل] إشارات المنصة الحقيقية (signals/update + شات) ──
     ORACLE_SIG_TTL_MS       : 8000,        // ✅ صلاحية قوة المنصة الرقمية (تُحدّث كل ~5ث)
     ORACLE_CHAT_TTL_MS      : 90000,       // ✅ صلاحية إشارة الشات الاتجاهية (M1+ تبقى صالحة ~90ث)
+    // ─── [FIX-G] صلاحية حجب أطول للشات المعاكس — M15 يبقى صالحاً ~15د لا 90ث ──
+    FIXG_CHAT_VETO_TTL_MS   : 900000,      // ✅ [FIX-G] ارفض أي إشارة تعاكس الشات خلال 15 دقيقة (الشات M15 كان محقاً في كل الخسائر)
+    FIXG_CHAT_VETO_ENABLED  : true,        // ✅ [FIX-G] فعّل احترام الأوراكل المعاكس
     ORACLE_MIN_STRENGTH     : 3,           // ✅ الحد الأدنى لقوة إشارة المنصة (0-4) لاعتبارها تأكيداً
     // ─── [V15/V16] محرّك إشارات المنصة (PSE) — الأوراكل كمولّد صفقات ──────────
     PSE_ENABLED             : false,       // ✅ اختياري: تفعيل توليد الصفقات من الأوراكل
@@ -192,7 +199,8 @@
     // ─── [V24] التقييم السريع الذكي داخل الشمعة ──────────────────────────────
     FAST_EVAL_ENABLED       : true,        // ✅ قيّم الأنماط داخل الشمعة
     FAST_EVAL_MIN_CONF      : 75,          // [V24] لا دخول سريع داخل الشمعة إلا بثقة ≥ هذه (الضعيف ينتظر الإغلاق)
-    FAST_EVAL_MS            : 700,         // [V24] فحص أكثر تواتراً (كان 1500) — رصد أسرع
+    FAST_EVAL_MS            : 1500,       // [DISCIPLINE] انضباط 17/5: 1500ms — تقييم أبطأ = إشارات أنقى
+    DISCIPLINE_ORACLE_FOR_ENGINES : true, // [DISCIPLINE] نبض التيك/الاستمرار يتطلّبان تأكيد أوراكل صريح (يقلّل خسائر V2)
     FAST_EVAL_MIN_TICKS     : 5,           // أدنى عدد تيكات في الشمعة المتشكّلة قبل تقييمها
     // ─── [V24] إشارات الاستمرار — تداول مع الاتجاه/الزخم (لا انعكاس فقط) ──────
     CONTINUATION_ENABLED    : true,        // ✅ دخول مع حركة قوية في اتجاه واضح
@@ -200,8 +208,8 @@
     // ─── [V24] محرك نبض التيكات (TickPulse) — رصد الفرص بالملي‑ثانية ──────────
     TICKPULSE_ENABLED       : true,        // ✅ يكتشف اندفاعات الزخم لحظياً من التيكات الخام
     TICKPULSE_MS            : 250,         // أدنى فاصل بين فحوص النبض (مللي ثانية)
-    TICKPULSE_WIN_MS        : 900,         // نافذة قياس الاندفاع (مللي ثانية)
-    TICKPULSE_MIN_TICKS     : 4,           // أدنى عدد تيكات في النافذة
+    TICKPULSE_WIN_MS        : 2400,        // ✅ [FIX] التيك الحقيقي ~470ms → نافذة 900ms = تيكان فقط (ضجيج). 2400ms ≈ 5 تيكات
+    TICKPULSE_MIN_TICKS     : 4,           // أدنى عدد تيكات في النافذة (الآن قابل للتحقق فعلياً ضمن 2400ms)
     TICKPULSE_MIN_REL       : 0.000060,   // أدنى عائد نسبي ليُعدّ اندفاعاً قوياً
     TICKPULSE_COOLDOWN_MS   : 3000,        // تهدئة بين نبضتين
     TICKPULSE_BASE_CONF     : 70,          // ثقة أساس النبض (تتدرّج مع القوة)
@@ -209,9 +217,12 @@
     ABSOLUTE_MIN_CONF       : 60,          // [V24] لا صفقة تحت 60% مهما كان السلايدر
     TWO_TRADES_ENABLED      : true,        // ✅ صفقتان حقيقيتان (أمران فعليان) عند التأكد
     TWO_TRADES_MIN_CONF     : 70,          // ثقة ≥ هذه → صفقتان
+    // ─── [FIX-F] إيقاف المضاعفة ×2 بعد خسائر متتالية — يوقف النزيف (−8$/خسارة) ──
+    FIXF_NO_DOUBLE_AFTER_LOSSES : 2,        // ✅ [FIX-F] إذا lossStreak ≥ هذا → صفقة واحدة فقط (لا ×2)
     // ─── [V17] محرّك توقيت الدخول (ETE) — لا تدخل إلا حين يوافق الزخم اللحظي ──
     ENTRY_TIMING_ENABLED    : true,        // ✅ تأجيل الدخول حتى يوافق ميل التيك اتجاه الصفقة
-    ETE_SLOPE_MS            : 1200,        // نافذة قياس الزخم اللحظي عند الدخول (ميلي ثانية)
+    ETE_SLOPE_MS            : 2500,        // ✅ [FIX] التيك ~470ms → 1200ms كان تيكين فقط. 2500ms ≈ 5 تيكات = ميل موثوق
+    ETE_MIN_TICKS           : 3,           // ✅ [FIX] أدنى عدد تيكات لاعتبار الميل اتجاهاً حقيقياً (وإلا «مسطّح» → ينتظر)
     ETE_MIN_REL             : 0.000020,   // أدنى عائد نسبي ليُعدّ الميل اتجاهاً (وإلا «مسطّح»)
     ETE_FLAT_WAITS          : true,        // ✅ [V24] الزخم المسطّح ينتظر ميلاً حقيقياً ثم يُلغى (لا يدخل فوراً) — أوقف خسارة الـ$4000
     ETE_MAX_WAIT_MS         : 0,           // 0 = تلقائي حسب عمر الصفقة | >0 = override ثابت بالملي
@@ -220,6 +231,13 @@
     ETE_WAIT_MAX_MS         : 5000,        // حدّ أقصى للانتظار (لفريمات 15ث+)
     ETE_POLL_MS             : 120,         // فحص الموافقة كل N ميلي ثانية
     ETE_ON_TIMEOUT          : 'skip',      // عند انتهاء المهلة دون توافق: 'skip' إلغاء | 'enter' دخول
+    // ─── [FIX-E] حارس جراحي للخسائر الحدّية — بلا إبطاء (الإشارات القوية تمر فوراً) ──
+    //   كل خسائر السجل: معاكسة للاتجاه + ثقة حدّية + زخم آني رقيق (n1/n2). نحجب هذا التقاطع فقط.
+    FIXE_ENABLED            : true,        // ✅ [FIX-E] فعّل الحارس الجراحي
+    FIXE_CT_MIN_CONF        : 78,          // ✅ [FIX-E] المعاكس للاتجاه يحتاج ثقة ≥78% (T9 كان 73% معاكس)
+    FIXE_THIN_MIN_CONF      : 75,          // ✅ [FIX-E] أقل من هذه الثقة + زخم آني رقيق = ارفض (T6 71%, T8 72%)
+    FIXE_THIN_TICKS         : 2,           // ✅ [FIX-E] زخم آني ≤ هذا العدد من التيكات (n1/n2) = رقيق
+    FIXE_THIN_SLOPE_MS      : 500,         // ✅ [FIX-E] نافذة قياس الزخم الآني (نفس slope500 في السجل)
     // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
     ORACLE_LAB_ENABLED      : true,        // ✅ تسجيل خام: يربط كل صفقة بمصدرها ونتيجتها (آمن)
     ORACLE_LAB_REPORT_EVERY : 10,          // اطبع جدول الأداء كل N صفقة
@@ -253,6 +271,13 @@
   // ✅ [V14.4] المسموح فعلياً: أي ثانية صحيحة ≥ 3 (3،4،5،6،7...). الممنوع فقط 1 و 2.
   //   لا تثبيت على شبكة — نحترم مدة المستخدم بالضبط، فقط حد أدنى 3ث.
   function _snapTradeDuration(secs) {
+    // ✅ [FIX-B] تثبيت مدة السكالبينغ وقصّ أي مدة شاذة (سبب time:60 في السجل)
+    if (CFG.SCALP_FIXED_ENABLED) {
+      let fx = CFG.SCALP_FIXED_SEC || 3;
+      if (fx < (CFG.MIN_TRADE_SEC || 3)) fx = (CFG.MIN_TRADE_SEC || 3);
+      if (fx > (CFG.SCALP_MAX_SEC || 5)) fx = (CFG.SCALP_MAX_SEC || 5);
+      return snapToPOTime(fx);
+    }
     const s = Math.round(Number(secs) || 0);
     return Math.max(CFG.MIN_TRADE_SEC || 3, s); // مدة المستخدم كما هي، بحد أدنى 3ث
   }
@@ -313,6 +338,8 @@
   let _signalPrice     = null;
   let _pendingIsTVE    = false;
   let _lossStreakPauseUntil = 0;
+  let _openTradesInFlight = 0;          // ✅ [FIX-C] عدد الصفقات المفتوحة فعلياً (لم تصل نتيجتها بعد)
+  let _inFlightDirection  = null;       // ✅ [FIX-C] اتجاه الصفقات المفتوحة الحالية
   let _ghostTradeActive = false;
   let _ghostWatching    = false;
   let _ghostConsecutive = 0;          // عداد الصفقات الوهمية المتتالية
@@ -559,6 +586,8 @@
     STATS.total++;
     // ملاحظة: تسجيل أداء النمط الحي يتم داخل DualWSSManager.onTradeResult (حيث النمط في النطاق)
     if (win) {
+      if (_openTradesInFlight > 0) _openTradesInFlight--;   // ✅ [FIX-C]
+      if (_openTradesInFlight === 0) _inFlightDirection = null;
       STATS.wins++; STATS.winStreak++; STATS.lossStreak=0;
       if(STATS.winStreak>STATS.bestStreak) STATS.bestStreak=STATS.winStreak;
       if(wasTVE) STATS.tveWins++;
@@ -575,6 +604,8 @@
         DualWSSManager.onTradeResult(true, _pendingTradeRecord ? _pendingTradeRecord.direction : null);
       }
     } else {
+      if (_openTradesInFlight > 0) _openTradesInFlight--;   // ✅ [FIX-C]
+      if (_openTradesInFlight === 0) _inFlightDirection = null;
       STATS.losses++; STATS.lossStreak++; STATS.winStreak=0;
       if(wasTVE) STATS.tveLosses++;
       // ✅ وقف خسائر تدريجي: خسارة واحدة = 5ث، خسارتين = 10ث، 3+ = 15ث
@@ -592,6 +623,21 @@
   }
   function getIMDBTier() { return 0; }
   function canIMDB() { return false; }
+  // ✅ [FIX-A/C] حارس موحّد قبل أي إرسال أمر — يُرجع true إذا وجب الرفض
+  function _shouldBlockSend(direction, asset) {
+    // FIX-A: الزوج المُرسَل يجب أن يطابق الزوج النشط (تيار السعر)
+    const a = normalizeAsset(asset || activeAsset);
+    if (!a || a !== activeAsset) {
+      addLog('🚫 [FIX-A] رفض — الزوج (' + a + ') لا يطابق النشط (' + activeAsset + ') | تداخل أزواج', 'error');
+      return true;
+    }
+    // FIX-C: لا صفقة جديدة في نفس الاتجاه ما دامت صفقة سابقة مفتوحة
+    if (_openTradesInFlight > 0 && _inFlightDirection === direction) {
+      addLog('🚫 [FIX-C] رفض — صفقة ' + direction + ' مفتوحة (' + _openTradesInFlight + ') ولم تصل نتيجتها', 'error');
+      return true;
+    }
+    return false;
+  }
   function executeTrade(direction, asset, overrideAmount) {
     if (!autoTrade) return;
     if (tradeExec) return;
@@ -599,6 +645,7 @@
       addLog('❌ لا يوجد مقبس تداول متاح', 'error');
       return;
     }
+    if (_shouldBlockSend(direction, asset)) return;   // ✅ [FIX-A/C]
     const action = direction === 'BUY' ? 'call' : 'put';
     const amt = overrideAmount || tradeAmount;
     const safeAmt = _safeAmount(amt);
@@ -610,6 +657,7 @@
     const msg = prefix + rid + suffix;
     try {
       tradeWSOrig(msg);
+      _openTradesInFlight++; _inFlightDirection = direction;   // ✅ [FIX-C]
       tradeExec = true;
       lastTradeMs = Date.now();
       _pendingTradeRecord = { asset: asset || activeAsset, direction, amount: safeAmt, openTs: Date.now(), source: 'directWS' };
@@ -622,6 +670,7 @@
       _tradeExecTimeout = setTimeout(() => {
         if (tradeExec) {
           tradeExec = false;
+          _openTradesInFlight = 0; _inFlightDirection = null;   // ✅ [FIX-C] أمان
           addLog('⏰ [TRADE-EXEC] تحرير تلقائي — لم تأتِ نتيجة الصفقة خلال ' + (tradeSec + 5) + 'ث', 'info');
           updateTradeBtn();
         }
@@ -4340,6 +4389,10 @@
 
       // (1) إشارة الشات الاتجاهية الصريحة — أقوى مصدر
       const cs = _chatSig[a];
+      // ✅ [FIX-G] حجب المعاكس بنافذة أطول (M15 يبقى صالحاً) — الشات كان SELL والبوت يشتري ويخسر
+      if (cs && CFG.FIXG_CHAT_VETO_ENABLED && cs.dir !== direction && (now - cs.ts) <= (CFG.FIXG_CHAT_VETO_TTL_MS || 900000)) {
+        return { agree: false, reason: 'chat-contradict', oracleDir: cs.dir };
+      }
       if (cs && (now - cs.ts) <= CFG.ORACLE_CHAT_TTL_MS) {
         if (cs.dir !== direction) return { agree: false, reason: 'chat-contradict', oracleDir: cs.dir };
         return { agree: true, reason: 'chat-confirm', oracleDir: cs.dir };
@@ -4548,13 +4601,24 @@
       // شرط الخروج المبكر: اتجاه واضح (3 شموع متتالية في نفس الاتجاه)
       const a = normalizeAsset(activeAsset);
       const candles = candleBuffers[a];
-      if (candles && candles.length >= CFG.RECALIBRATE_MIN_TREND_CANDLES) {
-        const last = candles.slice(-CFG.RECALIBRATE_MIN_TREND_CANDLES);
+      // ✅ [FIX-H] استئناف أصعب: شموع أكثر + عدم معارضة الشات (يمنع الاستئناف عند قمة ارتداد)
+      const _resumeN = Math.max(CFG.RECALIBRATE_MIN_TREND_CANDLES, CFG.FIXH_RESUME_CANDLES || 5);
+      if (candles && candles.length >= _resumeN) {
+        const last = candles.slice(-_resumeN);
         const allBull = last.every(c => c.isBullish);
         const allBear = last.every(c => !c.isBullish);
         if (allBull || allBear) {
+          const _resumeDir = allBull ? 'BUY' : 'SELL';
+          // [FIX-H] إذا الشات يعارض الاتجاه — لا تستأنف (السوق خداع)
+          if (CFG.FIXH_RESUME_NEEDS_ORACLE) {
+            const _orcR = oracleAgrees(_resumeDir, activeAsset);
+            if (!_orcR.agree) {
+              addLog('🔄 [RECALIBRATE] اتجاه ' + _resumeDir + ' لكن الشات يعارض (' + _orcR.oracleDir + ') — لا استئناف', 'info');
+              return true;
+            }
+          }
           _recalibrating = false;
-          addLog('🔄 [RECALIBRATE] ✅ اتجاه واضح (' + (allBull ? 'صعودي' : 'هبوطي') + ') — استئناف التداول', 'signal');
+          addLog('🔄 [RECALIBRATE] ✅ اتجاه واضح (' + (allBull ? 'صعودي' : 'هبوطي') + ' ×' + _resumeN + ') — استئناف التداول', 'signal');
           return false;
         }
       }
@@ -4724,6 +4788,16 @@
       const _oracleConfirmed = (_orc.reason === 'chat-confirm' || _orc.reason === 'plat-strength');
       if (_oracleConfirmed) {
         addLog('🔮 [ORACLE-OK] ' + signal.direction + ' مؤكَّد — ' + _orc.reason + (_orc.strength ? ' قوة:' + _orc.strength : '') + ' | قوة المنصة الآن: ' + (DualWSSManager.platformStrength ? DualWSSManager.platformStrength(signal.asset) : '?'), 'info');
+      }
+
+      // ═══ [DISCIPLINE] انضباط 17/5: المحرّكات الزائدة (نبض التيك/الاستمرار) تتطلّب
+      //   تأكيد أوراكل صريحاً — لا تتداول على زخم وحده (مصدر خسائر V2). أنماط الشموع
+      //   المؤكَّدة تبقى كما هي (نواة 17/5 الرابحة).
+      if (CFG.DISCIPLINE_ORACLE_FOR_ENGINES !== false &&
+          (signal.pattern === 'tick_pulse' || signal.pattern === 'momentum_continuation') &&
+          !_oracleConfirmed) {
+        addLog('🧭 [DISCIPLINE] ' + signal.pattern + ' مرفوض — يتطلّب تأكيد أوراكل صريح (انضباط 17/5)', 'info');
+        return;
       }
 
       // ✅ [V14.6] المعاكس للاتجاه + بلا تأكيد منصة = ملف الخسارة
@@ -5143,6 +5217,24 @@
 
       // ═══ تنفيذ حقيقي ═══
 
+      // ✅ [FIX-E] حارس جراحي: ارفض تقاطع (معاكس للاتجاه + ثقة حدّية + زخم آني رقيق n1/n2)
+      //   هذا التقاطع بالضبط هو ملف الخسائر الأربع في السجل. الإشارات القوية لا تتأثر.
+      if (CFG.FIXE_ENABLED) {
+        const _ctE = !_trendAllows(signal.direction) && _lastTrendDirection !== 'NEUTRAL';
+        const _slE = OracleLab.microSlope(normalizeAsset(signal.asset), CFG.FIXE_THIN_SLOPE_MS);
+        const _thinE = !_slE || (_slE.ticks || 0) <= CFG.FIXE_THIN_TICKS;
+        // (أ) معاكس للاتجاه بثقة دون العتبة → رفض (يحجب T9)
+        if (_ctE && (signal.confidence || 0) < CFG.FIXE_CT_MIN_CONF) {
+          addLog('🛡️ [FIX-E] رفض — ' + signal.direction + ' معاكس للاتجاه ' + _lastTrendDirection + ' بثقة ' + signal.confidence + '% < ' + CFG.FIXE_CT_MIN_CONF + '%', 'info');
+          return;
+        }
+        // (ب) ثقة حدّية + زخم آني رقيق (n1/n2) → رفض (يحجب T6 71% و T8 72%)
+        if (_thinE && (signal.confidence || 0) < CFG.FIXE_THIN_MIN_CONF) {
+          addLog('🛡️ [FIX-E] رفض — زخم آني رقيق (n' + (_slE ? (_slE.ticks||0) : 0) + ') + ثقة ' + signal.confidence + '% < ' + CFG.FIXE_THIN_MIN_CONF + '%', 'info');
+          return;
+        }
+      }
+
       // فحص النافذة الزمنية — أقصى عدد صفقات خلال فترة محددة
       const _now = Date.now();
       if (_now - _tradeWindowStart > CFG.TRADE_WINDOW_MS) {
@@ -5172,7 +5264,12 @@
       // [V24-2X] صفقتان حقيقيتان عند الثقة العالية (أمران فعليان — أصدق من مضاعفة المبلغ التجميلية)
       const _execAmount = tradeAmount;
       let _tradeCount = 1;
-      if (CFG.TWO_TRADES_ENABLED && (signal.confidence || 0) >= CFG.TWO_TRADES_MIN_CONF) {
+      // ✅ [FIX-F] لا تضاعف بعد خسائر متتالية — خسارة ×2 تضاعف النزيف
+      const _allowDoubleF = (STATS.lossStreak || 0) < (CFG.FIXF_NO_DOUBLE_AFTER_LOSSES || 2);
+      if (!_allowDoubleF && CFG.TWO_TRADES_ENABLED && (signal.confidence || 0) >= CFG.TWO_TRADES_MIN_CONF) {
+        addLog('🛡️ [FIX-F] لا مضاعفة — ' + STATS.lossStreak + ' خسائر متتالية → صفقة واحدة فقط', 'info');
+      }
+      if (_allowDoubleF && CFG.TWO_TRADES_ENABLED && (signal.confidence || 0) >= CFG.TWO_TRADES_MIN_CONF) {
         _tradeCount = 2;
         _lastTradeWasDouble = true;
         STATS.doubles = (STATS.doubles || 0) + 1;
@@ -5204,6 +5301,9 @@
     function _entryAligned(asset, direction) {
       const sl = OracleLab.microSlope(normalizeAsset(asset), CFG.ETE_SLOPE_MS);
       if (!sl) return { ok: true, reason: 'no-data' };   // لا بيانات → لا تعطّل
+      // ✅ [FIX] الميل المبني على تيك أو تيكين = ضجيج (سبب خسارتي momentum/tick_pulse في السجل).
+      //   عامله كـ«مسطّح» → ETE_FLAT_WAITS ينتظر ميلاً حقيقياً بدل الدخول الفوري على الضجيج.
+      if ((sl.ticks || 0) < (CFG.ETE_MIN_TICKS || 3)) return { ok: true, reason: 'مسطّح', sl };
       const min = CFG.ETE_MIN_REL;
       if (direction === 'BUY') {
         if (sl.rel >=  min) return { ok: true,  reason: 'صاعد✓', sl };
@@ -5264,6 +5364,7 @@
         addLog('⚠️ [DUAL-WSS] لا يوجد مقبس — الإشارة محفوظة لإعادة المحاولة: ' + direction + ' | ' + asset, 'error');
         return;
       }
+      if (_shouldBlockSend(direction, asset)) return;   // ✅ [FIX-A/C]
       const action = direction === 'BUY' ? 'call' : 'put';
       const amt = overrideAmount || tradeAmount;
       const safeAmt = _safeAmount(amt);
@@ -5291,7 +5392,9 @@
       try {
         for (let k = 0; k < nOrders; k++) {
           tradeWSOrig(prefix + _nextReqId() + suffix);   // [V24-2X] أمر فعلي لكل صفقة
+          _openTradesInFlight++;   // ✅ [FIX-C]
         }
+        _inFlightDirection = direction;   // ✅ [FIX-C]
         tradeExec = true;
         lastTradeMs = Date.now();
         // ✅ تحرير تلقائي لـ tradeExec بعد مدة الصفقة + 5 ثواني أمان
@@ -5299,6 +5402,7 @@
         _tradeExecTimeout = setTimeout(() => {
           if (tradeExec) {
             tradeExec = false;
+            _openTradesInFlight = 0; _inFlightDirection = null;   // ✅ [FIX-C] أمان
             addLog('⏰ [DUAL-EXEC] تحرير تلقائي — لم تأتِ نتيجة خلال ' + (tradeSec + 5) + 'ث', 'info');
             updateTradeBtn();
           }
