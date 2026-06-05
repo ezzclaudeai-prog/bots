@@ -271,6 +271,7 @@
     RETRACE_FILTER_ENABLED   : true,       // ✅ انتظر ارتداد تيك واحد بعد القفزة الحادة قبل الدخول
     RETRACE_WIN_MS           : 500,        // نافذة كشف القفزة الحادة
     RETRACE_REL              : 0.000030,   // قفزة > هذا العائد في < RETRACE_WIN_MS = حادة → انتظر الارتداد
+    RETRACE_FADE_FRAC        : 0.5,        // [V27.1] سرعة 500ms < نصف ذروة الاندفاع = ذروة مُمتصّة → ادخل
     // ─── [V28 / §F1] بوابة تنبؤات المنصة (Signals room UP2/DOWN2) — fail-open ──────
     //   المصدر الوحيد الحقيقي لـ«النظرة المسبقة» على هذا الوسيط (لا يوجد دفتر أوامر).
     //   يستخدم اتجاه تنبؤ المنصة + قوتها الرقمية (0-4) لتأكيد/حجب إشارات السكالب.
@@ -5498,15 +5499,24 @@
     function _spikeNeedsRecoil(asset, direction) {
       if (!CFG.RETRACE_FILTER_ENABLED) return false;
       const a = normalizeAsset(asset);
+      // [V27.1] الاندفاع القوي = استمرار رابح → ادخل فوراً، لا تنتظر ارتداداً قد لا يأتي
+      //   (السجل أظهر إلغاء عشرات الإشارات — منها 90% — بسبب انتظار ارتداد على نافذة 2-تيك).
+      const sLong = OracleLab.microSlope(a, CFG.TICKPULSE_WIN_MS);
+      if (sLong && Math.abs(sLong.rel) >= (CFG.SMART_ENTRY_STRONG_REL || 0.000220)) return false;
       const s = OracleLab.microSlope(a, CFG.RETRACE_WIN_MS);
       if (!s) return false;
       const spiked = direction === 'BUY' ? (s.rel >=  CFG.RETRACE_REL)
                                          : (s.rel <= -CFG.RETRACE_REL);
       if (!spiked) return false;                                          // لا قفزة حادة → لا انتظار
+      // [V27.1] الذروة «مُمتصّة» إذا توقّف صنع قمم/قيعان جديدة (تيك مسطّح/معاكس) — لا يلزم ارتداد فعلي
       const dlt = OracleLab.lastTickDelta(a);
-      if (dlt == null) return true;                                       // غير معروف → انتظر الارتداد
-      const recoiled = direction === 'BUY' ? (dlt < 0) : (dlt > 0);       // ارتدّ تيك واحد عكس القفزة؟
-      return !recoiled;
+      if (dlt != null && (direction === 'BUY' ? (dlt <= 0) : (dlt >= 0))) return false;
+      // [V27.1] أو إذا خبت السرعة اللحظية تحت نصف ذروة الاندفاع (الموجة تفقد قوتها)
+      if (sLong && sLong.dt > 0 && s.dt > 0) {
+        const vL = Math.abs(sLong.rel) / sLong.dt, vS = Math.abs(s.rel) / s.dt;
+        if (vS < (CFG.RETRACE_FADE_FRAC || 0.5) * vL) return false;
+      }
+      return true;                                                        // لا يزال يصنع قمة جديدة → انتظر
     }
     function _decouplerMaxWait() {
       const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 3));
