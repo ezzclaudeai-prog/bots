@@ -199,7 +199,7 @@
     // ─── [V24] التقييم السريع الذكي داخل الشمعة ──────────────────────────────
     FAST_EVAL_ENABLED       : true,        // ✅ قيّم الأنماط داخل الشمعة
     FAST_EVAL_MIN_CONF      : 75,          // [V24] لا دخول سريع داخل الشمعة إلا بثقة ≥ هذه (الضعيف ينتظر الإغلاق)
-    FAST_EVAL_MS            : 500,        // [RAW] تقييم سريع جداً داخل الشمعة — أقصى سرعة scalping
+    FAST_EVAL_MS            : 350,        // ✅ [V29] تقييم أسرع داخل الشمعة (500→350)
     DISCIPLINE_ORACLE_FOR_ENGINES : false, // [RAW] مطفأ — المحرّكات الزائدة تتداول بحرّية
     FAST_EVAL_MIN_TICKS     : 5,           // أدنى عدد تيكات في الشمعة المتشكّلة قبل تقييمها
     // ─── [V24] إشارات الاستمرار — تداول مع الاتجاه/الزخم (لا انعكاس فقط) ──────
@@ -207,11 +207,11 @@
     CONTINUATION_MIN_CONF   : 66,          // ثقة إشارة الاستمرار
     // ─── [V24] محرك نبض التيكات (TickPulse) — رصد الفرص بالملي‑ثانية ──────────
     TICKPULSE_ENABLED       : true,        // ✅ يكتشف اندفاعات الزخم لحظياً من التيكات الخام
-    TICKPULSE_MS            : 250,         // أدنى فاصل بين فحوص النبض (مللي ثانية)
+    TICKPULSE_MS            : 150,         // ✅ [V29] فحص أسرع للنبض (250→150) — التقاط أسرع
     TICKPULSE_WIN_MS        : 2400,        // ✅ [FIX] التيك الحقيقي ~470ms → نافذة 900ms = تيكان فقط (ضجيج). 2400ms ≈ 5 تيكات
     TICKPULSE_MIN_TICKS     : 4,           // أدنى عدد تيكات في النافذة (الآن قابل للتحقق فعلياً ضمن 2400ms)
     TICKPULSE_MIN_REL       : 0.000060,   // أدنى عائد نسبي ليُعدّ اندفاعاً قوياً
-    TICKPULSE_COOLDOWN_MS   : 3000,        // تهدئة بين نبضتين
+    TICKPULSE_COOLDOWN_MS   : 2000,        // ✅ [V29] تهدئة أقصر بين نبضتين (3000→2000)
     TICKPULSE_BASE_CONF     : 70,          // ثقة أساس النبض (تتدرّج مع القوة)
     // ─── [V24] أرضية ثقة صارمة + صفقتان حقيقيتان ──────────────────────────────
     ABSOLUTE_MIN_CONF       : 60,          // [V24] لا صفقة تحت 60% مهما كان السلايدر
@@ -283,6 +283,18 @@
     FORECAST_CONFIRM_BONUS   : 6,          // زيادة الثقة عند توافق التنبؤ
     FORECAST_PLAT_MIN_STR    : 3,          // قوة المنصة (0-4) ≥ هذا تُعتبر تأكيداً
     FORECAST_PLAT_BONUS      : 4,          // زيادة الثقة عند قوة منصة كافية
+    // ─── [V29] فلتر النظام/الترند الصارم + المسار السريع ─────────────────────────
+    //   بيانات الحساب الفعلي أثبتت: 7 من 8 صفقات بيع خسرت لأنها عكس ترند صاعد (السعر
+    //   تحرّك +16..+51 نقطة خلال 3ث ضدّها). الحل: احجب المعاكس للترند القوي تماماً،
+    //   وأدخِل الموافق له فوراً (مسار سريع — بلا انتظار توقيت) لتلبية السرعة المطلوبة.
+    REGIME_FILTER_ENABLED    : true,       // ✅ [V29] المفتاح الرئيسي
+    REGIME_TICK_WIN_MS       : 12000,      // نافذة قياس الترند من التيكات (12ث ≈ 25 تيك)
+    REGIME_MIN_TICKS         : 8,          // أدنى تيكات لاعتبار القياس ذا معنى
+    REGIME_STRONG_ER         : 0.42,       // كفاءة اتجاه ≥ هذا = ترند قوي → احجب المعاكس
+    REGIME_MIN_REL           : 0.000050,   // أدنى صافي حركة نسبي (وإلا «مسطّح» — لا ترند)
+    REGIME_BLOCK_MODE        : 'hard',     // 'hard'=حظر تام للمعاكس | 'soft'=خصم ثقة فقط
+    REGIME_SOFT_PENALTY      : 25,         // خصم الثقة في الوضع الناعم
+    REGIME_FASTLANE          : true,       // ✅ [V29] الموافق لترند قوي يدخل فوراً (سرعة قصوى)
     // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
     ORACLE_LAB_ENABLED      : true,        // ✅ تسجيل خام: يربط كل صفقة بمصدرها ونتيجتها (آمن)
     ORACLE_LAB_REPORT_EVERY : 10,          // اطبع جدول الأداء كل N صفقة
@@ -481,6 +493,22 @@
       const b = ticks[a]; if (!b || b.length < 2) return null;
       return b[b.length - 1].p - b[b.length - 2].p;
     }
+    // ═══ [V29] اتجاه النظام من التيكات (Kaufman Efficiency Ratio) — مقياس قوة الترند ═══
+    //   er = |صافي الحركة| / مجموع |الخطوات|  ∈ [0,1] : 1=ترند نظيف، 0=تذبذب.
+    //   مستقل عن حجم النافذة والزوج (scale-free). dir من إشارة صافي الحركة.
+    function microTrend(a, ms) {
+      const buf = ticks[a]; if (!buf || buf.length < 3) return null;
+      const now = buf[buf.length - 1].t;
+      let i = buf.length - 1; while (i > 0 && buf[i].t > now - ms) i--;
+      const n = buf.length - 1 - i;
+      if (n < 3) return null;
+      const p0 = buf[i].p, pl = buf[buf.length - 1].p;
+      let path = 0; for (let k = i + 1; k < buf.length; k++) path += Math.abs(buf[k].p - buf[k - 1].p);
+      if (!(path > 0) || !(p0 > 0)) return null;
+      const net = pl - p0;
+      const er = Math.abs(net) / path;                          // كفاءة الاتجاه 0..1
+      return { net, rel: net / p0, er, ticks: n, dir: net > 0 ? 'UP' : (net < 0 ? 'DOWN' : 'NEUTRAL') };
+    }
     // ═══ [V27] محرّك فك ازدواج الزخم (Second-Derivative Momentum Decoupler) ═══
     //   يقيس السرعة (مشتقة أولى) والتسارع (مشتقة ثانية) للعائد عبر انحدار تربيعي
     //   بالمربعات الصغرى — أمتن ضدّ ضجيج التيكات من فرق-الفرق المباشر. نافذة ديناميكية:
@@ -571,7 +599,7 @@
              ' ميل-معاكس:' + _pct(stats.slope.against) +
              ' ميل-مسطّح:' + _pct(stats.slope.flat), 'info');
     }
-    return { onTick, microSlope, microRangePos, tickDynamics, lastTickDelta, snapshot, recordClose, report, _stats: stats };
+    return { onTick, microSlope, microRangePos, microTrend, tickDynamics, lastTickDelta, snapshot, recordClose, report, _stats: stats };
   })();
   try { W._oracleLabReport = () => OracleLab.report(); } catch (_) {}
 
@@ -4557,6 +4585,21 @@
       return false;  // عكس الاتجاه → ممنوع
     }
 
+    // ═══ [V29] حالة النظام/الترند القوي من التيكات — مصدر واحد للحجب والمسار السريع ═══
+    //   strong = ترند بكفاءة عالية + حركة معتبرة + تيكات كافية. يُرجِع {dir, er, strong}.
+    function _regimeTrend(asset) {
+      const t = OracleLab.microTrend(normalizeAsset(asset), CFG.REGIME_TICK_WIN_MS);
+      if (!t) return { dir: 'NEUTRAL', er: 0, strong: false };
+      const strong = (t.ticks >= CFG.REGIME_MIN_TICKS) &&
+                     (t.er >= CFG.REGIME_STRONG_ER) &&
+                     (Math.abs(t.rel) >= CFG.REGIME_MIN_REL);
+      return { dir: t.dir, er: t.er, ticks: t.ticks, rel: t.rel, strong };
+    }
+    // موافقة الاتجاه للترند القوي (للمسار السريع وللحجب)
+    function _regimeAligned(direction, rt) {
+      return (direction === 'BUY' && rt.dir === 'UP') || (direction === 'SELL' && rt.dir === 'DOWN');
+    }
+
     // ✅ [V13.4] بوابة الثقة التكيفية — تتعلم من النتائج الحية لكل نمط
     //   bump: زيادة عتبة الثقة المطلوبة (تتناسب مع صافي خسائر النمط)
     //   disabled: تعطيل النمط مؤقتاً إذا نزل معدل فوزه الحي تحت العتبة بعد عينات كافية
@@ -4865,6 +4908,21 @@
       // ✅ [V13.6] فلتر الاتجاه — 'hard'=حظر | 'soft'=خصم ثقة
       let _effConf = signal.confidence;
       let _counterTrend = false;
+
+      // ═══ [V29] فلتر النظام/الترند الصارم — احجب المعاكس لترند قوي (مصدر خسائر السجل الفعلي) ═══
+      if (CFG.REGIME_FILTER_ENABLED) {
+        const _rt = _regimeTrend(signal.asset);
+        if (_rt.strong && !_regimeAligned(signal.direction, _rt)) {
+          if (CFG.REGIME_BLOCK_MODE === 'soft') {
+            _effConf -= CFG.REGIME_SOFT_PENALTY;
+            addLog('🧭 [REGIME-SOFT] ' + signal.direction + ' عكس ترند ' + _rt.dir + ' قوي (ER ' + _rt.er.toFixed(2) + ') — خصم ' + CFG.REGIME_SOFT_PENALTY + '% (ثقة: ' + _effConf + '%)', 'info');
+          } else {
+            addLog('🧭 [REGIME-BLOCK] ' + signal.direction + ' محجوب — ترند ' + _rt.dir + ' قوي (ER ' + _rt.er.toFixed(2) + ', ' + _rt.ticks + ' تيك) — لا تتداول عكس الترند', 'info');
+            return;
+          }
+        }
+      }
+
       if (!_trendAllows(signal.direction)) {
         if (CFG.TREND_FILTER_MODE === 'hard') {
           addLog('🚫 [TREND-BLOCK] ' + signal.direction + ' ممنوع — الاتجاه: ' + _lastTrendDirection, 'info');
@@ -5564,6 +5622,14 @@
     //   مهلة = جزء صغير من عمر الصفقة (≤1.5ث) كي لا نأكل إكسباير الـ3ث. عند انتهائها: تخطٍّ.
     function _decoupledExecute(direction, asset, amount, count) {
       if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
+      // ═══ [V29] المسار السريع — الموافق لترند قوي يدخل فوراً بلا انتظار توقيت ═══
+      if (CFG.REGIME_FILTER_ENABLED && CFG.REGIME_FASTLANE) {
+        const _rt = _regimeTrend(asset);
+        if (_rt.strong && _regimeAligned(direction, _rt)) {
+          addLog('🚀 [FAST-LANE] دخول فوري — موافق ترند ' + _rt.dir + ' قوي (ER ' + _rt.er.toFixed(2) + ')', 'signal');
+          _executeDualTrade(direction, asset, amount, count); return;
+        }
+      }
       const maxWait  = _decouplerMaxWait();
       const deadline = Date.now() + maxWait;
       const ready = () => {
