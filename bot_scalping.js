@@ -252,6 +252,25 @@
     SMART_ENTRY_SELL_MIN_POS : 0.20,       // ارفض SELL إذا كان السعر ≤ 20% من المدى (قرب القاع)
     SMART_ENTRY_FADE_FRAC    : 0.55,       // سرعة 500ms < 55% من سرعة 2400ms = اندفاع يخبو (ذروة)
     SMART_ENTRY_BYPASS_CONF  : 88,         // ثقة ≥ هذا تتجاوز الحارس (إشارة قوية جداً مثل 90%)
+    // ─── [V27] فك ازدواج الزخم (Second-Derivative Momentum Decoupler) — توقيت الدخول ──
+    //   يستبدل عدّ التيكات الثابت بسرعة (مشتقة أولى) + تسارع (مشتقة ثانية) عبر انحدار
+    //   تربيعي على نافذة ديناميكية. الدخول لا يُنفَّذ إلا حين توافق السرعة والتسارع اتجاه
+    //   الإشارة (الزخم يبني لا يخبو)، مع «فلتر ارتداد دقيق» يمتص قفزة الذروة قبل الإكسباير.
+    DECOUPLER_ENABLED        : true,       // ✅ [V27] مسار توقيت الدخول الجديد (false = دخول فوري خام)
+    DECOUPLER_WIN_MS         : 1500,       // النافذة الأساس لقياس السرعة/التسارع
+    DECOUPLER_MIN_PTS        : 4,          // أدنى تيكات (النافذة تتوسّع حتى السقف لبلوغها)
+    DECOUPLER_MIN_VEL        : 0.000020,   // أدنى سرعة معتبرة (عائد نسبي/ثانية)
+    DECOUPLER_ACC_TOL        : 0.000040,   // تسامح التسارع المعاكس (عائد/ث²) — فوقه = زخم يخبو
+    DECOUPLER_POLL_MS        : 120,        // فحص الموافقة كل N مللي ثانية
+    DECOUPLER_WAIT_FRAC      : 0.30,       // مهلة الانتظار = هذه النسبة من عمر الصفقة (30% من 3ث)
+    DECOUPLER_WAIT_MIN_MS    : 600,        // حدّ أدنى للمهلة
+    DECOUPLER_WAIT_MAX_MS    : 1500,       // حدّ أقصى للمهلة (لا نأكل عمر صفقة 3ث)
+    DECOUPLER_ON_TIMEOUT     : 'skip',     // عند انتهاء المهلة دون توافق: 'skip' إلغاء | 'enter' دخول
+    DECOUPLER_FLAT_WAITS     : true,       // الزخم المسطّح ينتظر إشارة حقيقية بدل الدخول على الضجيج
+    // ─── [V27] فلتر الارتداد الدقيق (Micro-Retracement) — تحسين سعر الدخول ──────────
+    RETRACE_FILTER_ENABLED   : true,       // ✅ انتظر ارتداد تيك واحد بعد القفزة الحادة قبل الدخول
+    RETRACE_WIN_MS           : 500,        // نافذة كشف القفزة الحادة
+    RETRACE_REL              : 0.000030,   // قفزة > هذا العائد في < RETRACE_WIN_MS = حادة → انتظر الارتداد
     // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
     ORACLE_LAB_ENABLED      : true,        // ✅ تسجيل خام: يربط كل صفقة بمصدرها ونتيجتها (آمن)
     ORACLE_LAB_REPORT_EVERY : 10,          // اطبع جدول الأداء كل N صفقة
@@ -445,6 +464,46 @@
       if (!(hi > lo)) return { pos: 0.5, ticks: n, hi, lo, last: last.p };
       return { pos: (last.p - lo) / (hi - lo), ticks: n, hi, lo, last: last.p };
     }
+    // [V27] فرق آخر تيكين (للكشف عن ارتداد تيك واحد) — موجب=صعد، سالب=هبط
+    function lastTickDelta(a) {
+      const b = ticks[a]; if (!b || b.length < 2) return null;
+      return b[b.length - 1].p - b[b.length - 2].p;
+    }
+    // ═══ [V27] محرّك فك ازدواج الزخم (Second-Derivative Momentum Decoupler) ═══
+    //   يقيس السرعة (مشتقة أولى) والتسارع (مشتقة ثانية) للعائد عبر انحدار تربيعي
+    //   بالمربعات الصغرى — أمتن ضدّ ضجيج التيكات من فرق-الفرق المباشر. نافذة ديناميكية:
+    //   تتوسّع خلف baseMs حتى تجمع minPts تيكات على الأقل (بسبب تباعد التيك ~450ms).
+    //   y = a + b·x + c·x²  حيث x=الزمن بالثواني (الآن=0)، y=العائد النسبي (الآن=0)
+    //   عند x=0:  السرعة = b ،  التسارع = 2c.
+    function tickDynamics(a, baseMs, minPts) {
+      const buf = ticks[a]; if (!buf || buf.length < 3) return null;
+      const L = buf.length - 1, now = buf[L].t, pl = buf[L].p;
+      if (!(pl > 0)) return null;
+      const need = minPts || 4, capMs = baseMs * 2;
+      let start = L, cnt = 1;
+      for (let k = L - 1; k >= 0; k--) {
+        const age = now - buf[k].t;
+        if (age > capMs) break;
+        if (age > baseMs && cnt >= need) break;
+        start = k; cnt++;
+      }
+      if (cnt < 3) return null;                          // التربيعي يحتاج ≥3 نقاط
+      let Sx=0,Sx2=0,Sx3=0,Sx4=0,Sy=0,Sxy=0,Sx2y=0;
+      for (let k = start; k <= L; k++) {
+        const x = (buf[k].t - now) / 1000;               // ثوانٍ (≤0)
+        const y = (buf[k].p - pl) / pl;                  // عائد نسبي
+        const x2 = x * x;
+        Sx += x; Sx2 += x2; Sx3 += x2 * x; Sx4 += x2 * x2;
+        Sy += y; Sxy += x * y; Sx2y += x2 * y;
+      }
+      const m = cnt;
+      const det = m*(Sx2*Sx4 - Sx3*Sx3) - Sx*(Sx*Sx4 - Sx3*Sx2) + Sx2*(Sx*Sx3 - Sx2*Sx2);
+      if (Math.abs(det) < 1e-30) return null;            // شبه أحادي → لا حل موثوق
+      const db = m*(Sxy*Sx4 - Sx3*Sx2y) - Sy*(Sx*Sx4 - Sx3*Sx2) + Sx2*(Sx*Sx2y - Sxy*Sx2);
+      const dc = m*(Sx2*Sx2y - Sxy*Sx3) - Sx*(Sx*Sx2y - Sxy*Sx2) + Sy*(Sx*Sx3 - Sx2*Sx2);
+      const vel = db / det, acc = 2 * (dc / det);
+      return { vel, acc, ticks: cnt, dt: now - buf[start].t, rel: (pl - buf[start].p) / buf[start].p };
+    }
     function snapshot(a, dir) {
       const os = (typeof DualWSSManager !== 'undefined' && DualWSSManager.oracleState)
         ? DualWSSManager.oracleState(a) : {};
@@ -500,7 +559,7 @@
              ' ميل-معاكس:' + _pct(stats.slope.against) +
              ' ميل-مسطّح:' + _pct(stats.slope.flat), 'info');
     }
-    return { onTick, microSlope, microRangePos, snapshot, recordClose, report, _stats: stats };
+    return { onTick, microSlope, microRangePos, tickDynamics, lastTickDelta, snapshot, recordClose, report, _stats: stats };
   })();
   try { W._oracleLabReport = () => OracleLab.report(); } catch (_) {}
 
@@ -4701,13 +4760,21 @@
       const s = OracleLab.microSlope(a, CFG.TICKPULSE_WIN_MS);
       if (!s || s.ticks < CFG.TICKPULSE_MIN_TICKS || Math.abs(s.rel) < CFG.TICKPULSE_MIN_REL) return;
       const dir = s.rel > 0 ? 'BUY' : 'SELL';
-      // اتّساق: نافذتان أقصر توافقان الاتجاه (الزخم يبني لا يرتد لحظياً)
-      const s2 = OracleLab.microSlope(a, Math.round(CFG.TICKPULSE_WIN_MS / 2));
-      const sShort = OracleLab.microSlope(a, 300);
-      const consistent = s2 && sShort &&
-        ((dir === 'BUY'  && s2.rel >= 0 && sShort.rel >= 0) ||
-         (dir === 'SELL' && s2.rel <= 0 && sShort.rel <= 0));
-      if (!consistent) return;
+      // [V27] استبدال عدّ-التيكات/فرق-الفرق بفك ازدواج الزخم: السرعة والتسارع يجب أن
+      //   يوافقا الاتجاه (الزخم يبني لا يخبو). الاندفاع القوي يُعفى من شرط التسارع
+      //   (الاستمرار القوي قد يدخل وهو يتباطأ قليلاً عند القمة لكنه يكمل).
+      const dyn = OracleLab.tickDynamics(a, CFG.DECOUPLER_WIN_MS, CFG.DECOUPLER_MIN_PTS);
+      const _strongPulse = Math.abs(s.rel) >= (CFG.SMART_ENTRY_STRONG_REL || 0.000220);
+      if (dyn) {
+        const velAgree = dir === 'BUY' ? (dyn.vel >=  CFG.DECOUPLER_MIN_VEL)
+                                       : (dyn.vel <= -CFG.DECOUPLER_MIN_VEL);
+        const accAgree = dir === 'BUY' ? (dyn.acc >= -CFG.DECOUPLER_ACC_TOL)
+                                       : (dyn.acc <=  CFG.DECOUPLER_ACC_TOL);
+        const velOppose = dir === 'BUY' ? (dyn.vel <= -CFG.DECOUPLER_MIN_VEL)
+                                        : (dyn.vel >=  CFG.DECOUPLER_MIN_VEL);
+        if (!_strongPulse && !(velAgree && accAgree)) return;   // زخم ضعيف يخبو → تجاهل
+        if (_strongPulse && velOppose) return;                  // حتى القوي لا يدخل ضدّ سرعة معاكسة
+      }
       const strength = Math.abs(s.rel) / CFG.TICKPULSE_MIN_REL;    // ≥1
       const conf = Math.max(CFG.TICKPULSE_BASE_CONF, Math.min(90, Math.round(CFG.TICKPULSE_BASE_CONF + (strength - 1) * 8)));
       const tb = tickBuffers[a];
@@ -5373,7 +5440,44 @@
       const ms = Math.round(durSec * 1000 * CFG.ETE_WAIT_FRAC);
       return Math.max(CFG.ETE_WAIT_MIN_MS, Math.min(CFG.ETE_WAIT_MAX_MS, ms));
     }
+    // ═══ [V27] بوابة فك ازدواج الزخم — السرعة + التسارع يوافقان الاتجاه ═══
+    //   ok=true يدخل، ok=false ينتظر/يُلغى. السبب يميّز: توافق / يخبو / معاكس / مسطّح.
+    function _decouplerAligned(asset, direction) {
+      const d = OracleLab.tickDynamics(normalizeAsset(asset), CFG.DECOUPLER_WIN_MS, CFG.DECOUPLER_MIN_PTS);
+      if (!d) return { ok: true, reason: 'لا-بيانات', d: null };          // fail-open
+      if ((d.ticks || 0) < CFG.DECOUPLER_MIN_PTS) return { ok: true, reason: 'مسطّح', d };
+      const up = direction === 'BUY';
+      const vMin = CFG.DECOUPLER_MIN_VEL, aTol = CFG.DECOUPLER_ACC_TOL;
+      const velAgree = up ? (d.vel >=  vMin) : (d.vel <= -vMin);
+      const velOppose = up ? (d.vel <= -vMin) : (d.vel >=  vMin);
+      const accOK    = up ? (d.acc >= -aTol) : (d.acc <=  aTol);          // التسارع لا يعاكس
+      if (velAgree && accOK) return { ok: true,  reason: (up ? 'سرعة↑+تسارع✓' : 'سرعة↓+تسارع✓'), d };
+      if (velOppose)         return { ok: false, reason: 'سرعة معاكسة', d };
+      if (velAgree && !accOK) return { ok: false, reason: 'زخم يخبو (تسارع معاكس)', d };
+      return { ok: true, reason: 'مسطّح', d };                            // محايد → اسمح
+    }
+    // ═══ [V27] فلتر الارتداد الدقيق — هل قفز السعر بحدّة ولم يرتدّ بعد؟ ═══
+    function _spikeNeedsRecoil(asset, direction) {
+      if (!CFG.RETRACE_FILTER_ENABLED) return false;
+      const a = normalizeAsset(asset);
+      const s = OracleLab.microSlope(a, CFG.RETRACE_WIN_MS);
+      if (!s) return false;
+      const spiked = direction === 'BUY' ? (s.rel >=  CFG.RETRACE_REL)
+                                         : (s.rel <= -CFG.RETRACE_REL);
+      if (!spiked) return false;                                          // لا قفزة حادة → لا انتظار
+      const dlt = OracleLab.lastTickDelta(a);
+      if (dlt == null) return true;                                       // غير معروف → انتظر الارتداد
+      const recoiled = direction === 'BUY' ? (dlt < 0) : (dlt > 0);       // ارتدّ تيك واحد عكس القفزة؟
+      return !recoiled;
+    }
+    function _decouplerMaxWait() {
+      const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 3));
+      const ms = Math.round(durSec * 1000 * CFG.DECOUPLER_WAIT_FRAC);
+      return Math.max(CFG.DECOUPLER_WAIT_MIN_MS, Math.min(CFG.DECOUPLER_WAIT_MAX_MS, ms));
+    }
     function _timedExecute(direction, asset, amount, count) {
+      // [V27] مسار فك ازدواج الزخم له الأولوية (يحلّ فشل إكسباير 3ث من شراء الذروة)
+      if (CFG.DECOUPLER_ENABLED) { _decoupledExecute(direction, asset, amount, count); return; }
       if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount, count); return; }
       if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
       const maxWait = _eteMaxWait();
@@ -5405,6 +5509,47 @@
           }
         }
       }, CFG.ETE_POLL_MS);
+    }
+
+    // ═══ [V27] تنفيذ موقَّت عبر فك ازدواج الزخم + فلتر الارتداد الدقيق ═══
+    //   يدخل فور توافق (السرعة + التسارع) مع الاتجاه وبعد امتصاص أي قفزة ذروة (ارتداد تيك).
+    //   مهلة = جزء صغير من عمر الصفقة (≤1.5ث) كي لا نأكل إكسباير الـ3ث. عند انتهائها: تخطٍّ.
+    function _decoupledExecute(direction, asset, amount, count) {
+      if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
+      const maxWait  = _decouplerMaxWait();
+      const deadline = Date.now() + maxWait;
+      const ready = () => {
+        const c = _decouplerAligned(asset, direction);
+        const flatBlocks = (CFG.DECOUPLER_FLAT_WAITS !== false) && c.reason === 'مسطّح';
+        if (!c.ok || flatBlocks) return { go: false, why: flatBlocks ? 'بلا زخم (مسطّح)' : c.reason, c };
+        if (_spikeNeedsRecoil(asset, direction)) return { go: false, why: 'قفزة حادة — انتظار ارتداد', c };
+        return { go: true, why: c.reason, c };
+      };
+      const fire = (why) => {
+        const v = (why && why.d && why.d.vel != null) ? (why.d.vel * 1e6).toFixed(1) : '?';
+        const ac = (why && why.d && why.d.acc != null) ? (why.d.acc * 1e6).toFixed(1) : '?';
+        addLog('🎯 [DECOUPLER] دخول ' + direction + ' — سرعة ' + v + 'e-6/ث | تسارع ' + ac + 'e-6/ث²', 'signal');
+        _executeDualTrade(direction, asset, amount, count);
+      };
+      const first = ready();
+      if (first.go) { fire(first.c); return; }
+      addLog('⏳ [DECOUPLER] انتظار توقيت — ' + first.why + ' | ' + direction + ' | مهلة ' + maxWait + 'ms', 'info');
+      _entryTimer = setInterval(() => {
+        if (!_running || tradeExec) { clearInterval(_entryTimer); _entryTimer = null; return; }
+        const r = ready();
+        if (r.go) {
+          clearInterval(_entryTimer); _entryTimer = null;
+          fire(r.c);
+        } else if (Date.now() >= deadline) {
+          clearInterval(_entryTimer); _entryTimer = null;
+          if (CFG.DECOUPLER_ON_TIMEOUT === 'enter') {
+            addLog('🎯 [DECOUPLER] انتهت المهلة — دخول رغم عدم التوافق ' + direction, 'info');
+            _executeDualTrade(direction, asset, amount, count);
+          } else {
+            addLog('🚫 [DECOUPLER] انتهت المهلة دون توافق — إلغاء ' + direction + ' (تجنّب توقيت سيّئ)', 'info');
+          }
+        }
+      }, CFG.DECOUPLER_POLL_MS);
     }
 
     function _executeDualTrade(direction, asset, overrideAmount, count) {
