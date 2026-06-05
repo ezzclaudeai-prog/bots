@@ -75,7 +75,7 @@
     PYRAMID_ENABLED          : false,
     SLIPPAGE_ENABLED         : false,
     TVE_PRIORITY             : false,
-    TREND_FILTER_ENABLED     : true,
+    TREND_FILTER_ENABLED     : false,      // [RAW] مطفأ — بلا فلتر اتجاه
     SHORT_MODE_TVE_DIRECT    : false,
     SEE_ENABLED              : false,
     PREDICTIVE_FIRE_MS       : 200,
@@ -88,6 +88,11 @@
     SEE_MAX_MS               : 5000,
     MINI_BACKTEST_ENABLED    : false,
     IMDB_TIER_DOUBLE         : 70,
+    // [V22] مضاعفة المبلغ عند الإشارة القوية (الصفقات المزدوجة)
+    DOUBLE_ON_STRONG         : true,       // ✅ ضاعف المبلغ حسب قوة الإشارة
+    IMDB_TIER_TRIPLE         : 85,         // ثقة ≥85% → ×3
+    IMDB_TIER_QUAD           : 94,         // ثقة ≥94% → ×4
+    DOUBLE_MAX_MULT          : 4,          // أقصى مضاعفة
     SIGNAL_WATCHER_MS        : 25,
     SIGNAL_WATCHER_EXPIRY_MS : 1500,
     MAX_LOSS_STREAK          : 3,
@@ -115,33 +120,35 @@
     // ─── Dual-WSS Latency Arbitrage ──────────────────────────────────
     DUAL_WSS_ENABLED        : true,
     DUAL_WSS_MIN_GAP_MS     : 150,        // الحد الأدنى لفجوة الكمون (مللي ثانية)
-    DUAL_WSS_SYNTHETIC_DELAY : 300,       // تأخير اصطناعي إذا كانت الفجوة أقل من الحد الأدنى
+    DUAL_WSS_SYNTHETIC_DELAY : 0,         // [V24-FAST] أُلغي التأخير الاصطناعي — دخول فوري
     DUAL_WSS_PING_INTERVAL  : 5000,       // فاصل قياس الكمون (مللي ثانية)
     DUAL_WSS_RECONNECT_DELAY: 3000,       // تأخير إعادة الاتصال عند الفشل
     DUAL_WSS_MAX_SIGNAL_AGE : 2000,       // أقصى عمر للإشارة (مللي ثانية) قبل الرفض
-    DUAL_WSS_JITTER_MS      : 50,         // اهتزاز التنفيذ (مللي ثانية)
+    DUAL_WSS_JITTER_MS      : 0,          // [V24-FAST] بلا اهتزاز — دخول فوري
 
     // ─── حماية متقدمة ──────────────────────────────────────────────
     MIN_CONFIDENCE_THRESHOLD: 75,          // حد الثقة الأدنى — يتحكم به سلايدر الواجهة
-    GHOST_TRADE_ENABLED     : true,        // صفقة وهمية بعد أول خسارة
+    GHOST_TRADE_ENABLED     : false,       // [RAW] مطفأ — بلا حماية
+    GHOST_TRIGGER_STREAK    : 2,           // ✅ [V13.6] فعّل Ghost فقط بعد N خسائر متتالية (2 بدل 1 — أسرع)
+    GHOST_MAX_CONSECUTIVE   : 1,           // ✅ [V13.6] عدد الصفقات الوهمية قبل العودة للحقيقي (1 بدل 2 — أسرع)
     RECALIBRATE_ON_STREAK   : 3,          // إعادة معايرة بعد N خسائر متتالية
     RECALIBRATE_DURATION_MS : 45000,      // مدة إعادة المعايرة القصوى (45 ثانية)
     RECALIBRATE_MIN_TREND_CANDLES : 3,    // عدد الشموع المتتالية المطلوبة لإنهاء إعادة المعايرة
-    CANDLE_LOCK_ENABLED     : true,        // منع التداول في نفس الشمعة مرتين
+    CANDLE_LOCK_ENABLED     : false,       // [RAW] مطفأ — يسمح بتكرار التداول في نفس الشمعة (أسرع)
     TRADE_COOLDOWN_RATIO    : 0.25,       // نسبة التهدئة من مدة الشمعة
     TRADE_COOLDOWN_FLOOR_MS : 500,        // الحد الأدنى للتهدئة
     LOSS_STREAK_PAUSE_MS    : 10000,      // وقف بعد خسائر متتالية (10ث بدل 45ث — لا نعطل 3 شموع)
 
     // ─── حماية استنفاد الاتجاه وتكرار النمط ──────────────────────────────
-    EXHAUSTION_ENABLED      : true,       // كشف استنفاد الاتجاه — منع الدخول عند القمة
+    EXHAUSTION_ENABLED      : false,      // [RAW] مطفأ — بلا حماية من القمم
     EXHAUSTION_PEAK_THRESHOLD: 0.80,      // نسبة موقع السعر من المدى (80% = قمة / 20% = قاع)
     EXHAUSTION_MIN_CANDLES   : 60,        // الحد الأدنى لشموع الفحص — يضمن تغطية 60 ثانية على أي فريم
     EXHAUSTION_BULL_RATIO    : 0.65,      // نسبة الشموع الصاعدة المطلوبة للكشف (65% من آخر N شموع)
     MAX_CONSEC_SAME_DIR     : 2,          // حد الصفقات المتتالية في نفس الاتجاه (2 = أقصى صفقتين BUY أو SELL متتاليتين)
     CONSEC_CONF_PENALTY     : 20,         // خصم من الثقة لكل صفقة متتالية في نفس الاتجاه (20% → 80% تصبح 60%)
-    PATTERN_REARM_ENABLED   : true,       // حاجز إعادة تسليح النمط — نفس النمط لا يكرر خلال فترة الحماية
-    PATTERN_REARM_MIN_MS    : 10000,      // الحد الأدنى لنافذة إعادة التسليح (10 ثانية) — تقليل الانتظار على الفريمات القصيرة
-    MAX_TRADES_PER_WINDOW   : 4,          // أقصى عدد صفقات في النافذة الزمنية (4 بدل 3 — المزيد من الفرص)
+    PATTERN_REARM_ENABLED   : false,      // [RAW] مطفأ — يسمح بتكرار نفس النمط فوراً (أسرع)
+    PATTERN_REARM_MIN_MS    : 2000,       // [RAW] حاجز ضئيل (والحاجز نفسه مطفأ) — أقصى سرعة
+    MAX_TRADES_PER_WINDOW   : 12,         // ✅ [V14.5] سقف الصفقات/دقيقة (12 بدل 4 — تسريع السكالبينغ)
     TRADE_WINDOW_MS         : 60000,      // نافذة العد: 60 ثانية
 
     // ─── تحسين الأنماط ──────────────────────────────────────────────────
@@ -150,6 +157,105 @@
     ENGULFING_SIZE_BONUS    : 5,           // مكافأة حجم الابتلاع (>2× جسم سابق)
     THREE_CANDLE_PEAK_REJECT: 0.72,        // رفض 3bullish إذا السعر فوق 72% من المدى الأخير
     THREE_CANDLE_MIN_ACCEL  : 1.0,         // تسارع أدنى — جسم الشمعة الأخيرة يجب أن ≥ جسم الأولى
+    THREE_CANDLE_PEAK_WINDOW : 30,         // ✅ [V13.4] نافذة فحص القمة/القاع لنمط 3 شموع (30 بدل 10)
+
+    // ─── [V13.4] تحسين فلتر الاتجاه + استنفاد اتجاهي + ثقة تكيفية ───────────
+    TREND_WINDOW_CANDLES    : 24,          // ✅ [V13.6] نافذة كشف الاتجاه (24 — أقل لزوجة، يحجب أقل في التذبذب)
+    TREND_ATR_Z_THRESHOLD   : 0.9,         // ✅ [V13.6] قوة الاتجاه بوحدات ATR (0.9 — يحجب الترند الواضح فقط)
+    TREND_FILTER_MODE       : 'soft',      // ✅ [V13.6] 'soft'=خصم ثقة للمعاكس (يبقى سريعاً) | 'hard'=حظر تام
+    TREND_SOFT_PENALTY      : 12,          // ✅ [V13.6] خصم الثقة للإشارة المعاكسة في الوضع الناعم
+    COUNTERTREND_NEEDS_ORACLE: false,      // ✅ [V14.6] اختياري ومُطفأ: بيانات السجل أثبتت أن المعاكس 75% رابح — لا تحجبه
+    COUNTERTREND_MIN_CONF    : 90,         // عتبة الثقة لو فعّلته يدوياً
+    EXHAUSTION_COOLDOWN_MS  : 4000,        // ✅ [V13.6] بعد الاستنفاد امنع اتجاه الاستمرار 4ث (كان 9 — أسرع)
+    MIN_TRADE_SEC           : 3,           // ✅ [V14.2] حد أدنى لمدة الصفقة — المنصة ترفض <3ث (IncorrectExpTime)
+    // ─── [FIX-B] تثبيت مدة السكالبينغ — يمنع time:60 الشاذ المرصود في السجل ──
+    SCALP_FIXED_SEC         : 3,           // ✅ [FIX-B] مدة ثابتة لكل صفقة سكالبينغ
+    SCALP_MAX_SEC           : 5,           // ✅ [FIX-B] أي مدة أكبر تُقصّ — لا صفقات 60ث على إشارة 3ث
+    SCALP_FIXED_ENABLED     : true,        // ✅ [FIX-B] فعّل تثبيت المدة
+    ADAPTIVE_CONF_ENABLED   : false,       // [RAW] مطفأ — بلا رفع تكيفي للعتبة
+    ADAPTIVE_MIN_SAMPLES    : 6,           // الحد الأدنى من الصفقات قبل تفعيل التكيّف لكل نمط
+    ADAPTIVE_CONF_PER_LOSS  : 6,           // رفع عتبة الثقة المطلوبة % لكل خسارة صافية للنمط
+    ADAPTIVE_DISABLE_WR     : 0.40,        // تعطيل النمط مؤقتاً إذا نزل معدل فوزه الحي تحت 40%
+
+    // ─── [V13.5 / المسار C] فلتر تأكيد الأوراكل (Latency lead confirmation) ──
+    ORACLE_CONFIRM_ENABLED  : false,       // [RAW] مطفأ — بلا فيتو أوراكل
+    ORACLE_CONFIRM_WINDOW_MS: 2500,        // نافذة تيكات الأوراكل المعتبرة (مللي ثانية)
+    ORACLE_CONFIRM_MIN_TICKS: 3,           // أقل عدد تيكات أوراكل مطلوب — وإلا fail-open (يسمح)
+    ORACLE_CONFIRM_K        : 1.0,         // الميل يُحسب معارِضاً فقط إذا تجاوز K×ضجيج التيك (يحجب التعارض الواضح فقط)
+    // ─── [V14 — إصلاح الأوراكل] إشارات المنصة الحقيقية (signals/update + شات) ──
+    ORACLE_SIG_TTL_MS       : 8000,        // ✅ صلاحية قوة المنصة الرقمية (تُحدّث كل ~5ث)
+    ORACLE_CHAT_TTL_MS      : 90000,       // ✅ صلاحية إشارة الشات الاتجاهية (M1+ تبقى صالحة ~90ث)
+    // ─── [FIX-G] صلاحية حجب أطول للشات المعاكس — M15 يبقى صالحاً ~15د لا 90ث ──
+    FIXG_CHAT_VETO_TTL_MS   : 900000,      // ✅ [FIX-G] ارفض أي إشارة تعاكس الشات خلال 15 دقيقة (الشات M15 كان محقاً في كل الخسائر)
+    FIXG_CHAT_VETO_ENABLED  : false,       // [RAW] مطفأ — بلا فيتو شات معاكس
+    ORACLE_MIN_STRENGTH     : 3,           // ✅ الحد الأدنى لقوة إشارة المنصة (0-4) لاعتبارها تأكيداً
+    // ─── [V15/V16] محرّك إشارات المنصة (PSE) — الأوراكل كمولّد صفقات ──────────
+    PSE_ENABLED             : false,       // ✅ اختياري: تفعيل توليد الصفقات من الأوراكل
+    PSE_CONF                : 88,          // ثقة الإشارة المولّدة (تُرفع مع قوة المنصة)
+    PSE_USE_PLAT            : true,        // [V16] استخدم قوة signals/update كبوابة
+    PSE_USE_SLOPE           : true,        // [V16] استخدم ميل التيك لتحديد الاتجاه عند غياب الشات
+    PSE_SLOPE_MS            : 500,         // نافذة حساب الميل (ميلي ثانية)
+    PSE_SLOPE_MIN_REL       : 0.000020,   // أدنى عائد نسبي لاعتبار الميل اتجاهاً واضحاً
+    // ─── [V24] التقييم السريع الذكي داخل الشمعة ──────────────────────────────
+    FAST_EVAL_ENABLED       : true,        // ✅ قيّم الأنماط داخل الشمعة
+    FAST_EVAL_MIN_CONF      : 75,          // [V24] لا دخول سريع داخل الشمعة إلا بثقة ≥ هذه (الضعيف ينتظر الإغلاق)
+    FAST_EVAL_MS            : 500,        // [RAW] تقييم سريع جداً داخل الشمعة — أقصى سرعة scalping
+    DISCIPLINE_ORACLE_FOR_ENGINES : false, // [RAW] مطفأ — المحرّكات الزائدة تتداول بحرّية
+    FAST_EVAL_MIN_TICKS     : 5,           // أدنى عدد تيكات في الشمعة المتشكّلة قبل تقييمها
+    // ─── [V24] إشارات الاستمرار — تداول مع الاتجاه/الزخم (لا انعكاس فقط) ──────
+    CONTINUATION_ENABLED    : true,        // ✅ دخول مع حركة قوية في اتجاه واضح
+    CONTINUATION_MIN_CONF   : 66,          // ثقة إشارة الاستمرار
+    // ─── [V24] محرك نبض التيكات (TickPulse) — رصد الفرص بالملي‑ثانية ──────────
+    TICKPULSE_ENABLED       : true,        // ✅ يكتشف اندفاعات الزخم لحظياً من التيكات الخام
+    TICKPULSE_MS            : 250,         // أدنى فاصل بين فحوص النبض (مللي ثانية)
+    TICKPULSE_WIN_MS        : 2400,        // ✅ [FIX] التيك الحقيقي ~470ms → نافذة 900ms = تيكان فقط (ضجيج). 2400ms ≈ 5 تيكات
+    TICKPULSE_MIN_TICKS     : 4,           // أدنى عدد تيكات في النافذة (الآن قابل للتحقق فعلياً ضمن 2400ms)
+    TICKPULSE_MIN_REL       : 0.000060,   // أدنى عائد نسبي ليُعدّ اندفاعاً قوياً
+    TICKPULSE_COOLDOWN_MS   : 3000,        // تهدئة بين نبضتين
+    TICKPULSE_BASE_CONF     : 70,          // ثقة أساس النبض (تتدرّج مع القوة)
+    // ─── [V24] أرضية ثقة صارمة + صفقتان حقيقيتان ──────────────────────────────
+    ABSOLUTE_MIN_CONF       : 60,          // [V24] لا صفقة تحت 60% مهما كان السلايدر
+    TWO_TRADES_ENABLED      : true,        // ✅ صفقتان حقيقيتان (أمران فعليان) عند التأكد
+    TWO_TRADES_MIN_CONF     : 70,          // ثقة ≥ هذه → صفقتان
+    // ─── [FIX-F] إيقاف المضاعفة ×2 بعد خسائر متتالية — يوقف النزيف (−8$/خسارة) ──
+    FIXF_NO_DOUBLE_AFTER_LOSSES : 2,        // ✅ [FIX-F] إذا lossStreak ≥ هذا → صفقة واحدة فقط (لا ×2)
+    // ─── [V17] محرّك توقيت الدخول (ETE) — لا تدخل إلا حين يوافق الزخم اللحظي ──
+    ENTRY_TIMING_ENABLED    : false,       // [RAW] مطفأ — دخول فوري بلا انتظار ميل التيك (أسرع)
+    ETE_SLOPE_MS            : 2500,        // ✅ [FIX] التيك ~470ms → 1200ms كان تيكين فقط. 2500ms ≈ 5 تيكات = ميل موثوق
+    ETE_MIN_TICKS           : 3,           // ✅ [FIX] أدنى عدد تيكات لاعتبار الميل اتجاهاً حقيقياً (وإلا «مسطّح» → ينتظر)
+    ETE_MIN_REL             : 0.000020,   // أدنى عائد نسبي ليُعدّ الميل اتجاهاً (وإلا «مسطّح»)
+    ETE_FLAT_WAITS          : true,        // ✅ [V24] الزخم المسطّح ينتظر ميلاً حقيقياً ثم يُلغى (لا يدخل فوراً) — أوقف خسارة الـ$4000
+    ETE_MAX_WAIT_MS         : 0,           // 0 = تلقائي حسب عمر الصفقة | >0 = override ثابت بالملي
+    ETE_WAIT_FRAC           : 0.30,        // نسبة عمر الصفقة المسموح انتظارها للدخول (30% من time)
+    ETE_WAIT_MIN_MS         : 600,         // حدّ أدنى للانتظار (لفريمات 3-4ث)
+    ETE_WAIT_MAX_MS         : 5000,        // حدّ أقصى للانتظار (لفريمات 15ث+)
+    ETE_POLL_MS             : 120,         // فحص الموافقة كل N ميلي ثانية
+    ETE_ON_TIMEOUT          : 'skip',      // عند انتهاء المهلة دون توافق: 'skip' إلغاء | 'enter' دخول
+    // ─── [FIX-E] حارس جراحي للخسائر الحدّية — بلا إبطاء (الإشارات القوية تمر فوراً) ──
+    //   كل خسائر السجل: معاكسة للاتجاه + ثقة حدّية + زخم آني رقيق (n1/n2). نحجب هذا التقاطع فقط.
+    FIXE_ENABLED            : false,       // [RAW] مطفأ — بلا حارس جراحي
+    FIXE_CT_MIN_CONF        : 78,          // ✅ [FIX-E] المعاكس للاتجاه يحتاج ثقة ≥78% (T9 كان 73% معاكس)
+    FIXE_THIN_MIN_CONF      : 75,          // ✅ [FIX-E] أقل من هذه الثقة + زخم آني رقيق = ارفض (T6 71%, T8 72%)
+    FIXE_THIN_TICKS         : 2,           // ✅ [FIX-E] زخم آني ≤ هذا العدد من التيكات (n1/n2) = رقيق
+    FIXE_THIN_SLOPE_MS      : 500,         // ✅ [FIX-E] نافذة قياس الزخم الآني (نفس slope500 في السجل)
+    // ─── [V26] الدخول الذكي — حارس «شراء القمة / بيع القاع» (يعالج: التحليل صحيح والتوقيت خطأ) ──
+    //   تحليل السجل: الاندفاع القوي (|ميل2400|≥STRONG) يستمر ويربح (5/5). أما الاندفاع
+    //   الضعيف-المتوسط فيدخل عند ذروة موجة قصيرة ثم يرتد خلال 3ث = معظم خسائر BUY (4/4)
+    //   وخسارة SELL T1. الحارس يرفض الدخول فقط عند تقاطع: (اندفاع غير قوي) + (سعر عند الطرف
+    //   غير المواتي للمدى اللحظي) + (سرعة لحظية تخبو) — ولا يلمس الاستمرار القوي الرابح.
+    SMART_ENTRY_ENABLED      : true,       // ✅ [V26] المفتاح الرئيسي (اجعله false للعودة للسلوك الخام)
+    SMART_ENTRY_STRONG_REL   : 0.000220,   // |ميل2400| ≥ هذا = اندفاع قوي → دخول فوري (استمرار رابح)
+    SMART_ENTRY_RANGE_MS     : 3000,       // نافذة قياس مدى التيكات اللحظي (موضع السعر داخله)
+    SMART_ENTRY_SHORT_MS     : 500,        // نافذة السرعة اللحظية (لكشف خبو الاندفاع)
+    SMART_ENTRY_MIN_TICKS    : 4,          // أدنى تيكات لاعتبار المدى ذا معنى (وإلا اسمح)
+    SMART_ENTRY_BUY_MAX_POS  : 0.80,       // ارفض BUY إذا كان السعر ≥ 80% من المدى (قرب القمة)
+    SMART_ENTRY_SELL_MIN_POS : 0.20,       // ارفض SELL إذا كان السعر ≤ 20% من المدى (قرب القاع)
+    SMART_ENTRY_FADE_FRAC    : 0.55,       // سرعة 500ms < 55% من سرعة 2400ms = اندفاع يخبو (ذروة)
+    SMART_ENTRY_BYPASS_CONF  : 88,         // ثقة ≥ هذا تتجاوز الحارس (إشارة قوية جداً مثل 90%)
+    // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
+    ORACLE_LAB_ENABLED      : true,        // ✅ تسجيل خام: يربط كل صفقة بمصدرها ونتيجتها (آمن)
+    ORACLE_LAB_REPORT_EVERY : 10,          // اطبع جدول الأداء كل N صفقة
+    ORACLE_LAB_FLAT_REL     : 0.000001,   // عتبة اعتبار الميل «مسطّحاً»
 
     // ─── Socket Stability ──────────────────────────────────────────────
     WS_SELF_PING_ENABLED    : false,       // ✅ إيقاف PING الخاص — المنصة تدير PING/PONG بنفسها
@@ -175,6 +281,20 @@
 
   const PO_VALID_TIMES  = [1,2,3,5,10,15,20,25,30,45,60,90,120,180,300,600,900,1800,3600];
   const TRUSTED_SOURCES = new Set(['saveCharts','platform','updateCharts','history']);
+
+  // ✅ [V14.4] المسموح فعلياً: أي ثانية صحيحة ≥ 3 (3،4،5،6،7...). الممنوع فقط 1 و 2.
+  //   لا تثبيت على شبكة — نحترم مدة المستخدم بالضبط، فقط حد أدنى 3ث.
+  function _snapTradeDuration(secs) {
+    // ✅ [FIX-B] تثبيت مدة السكالبينغ وقصّ أي مدة شاذة (سبب time:60 في السجل)
+    if (CFG.SCALP_FIXED_ENABLED) {
+      let fx = CFG.SCALP_FIXED_SEC || 3;
+      if (fx < (CFG.MIN_TRADE_SEC || 3)) fx = (CFG.MIN_TRADE_SEC || 3);
+      if (fx > (CFG.SCALP_MAX_SEC || 5)) fx = (CFG.SCALP_MAX_SEC || 5);
+      return snapToPOTime(fx);
+    }
+    const s = Math.round(Number(secs) || 0);
+    return Math.max(CFG.MIN_TRADE_SEC || 3, s); // مدة المستخدم كما هي، بحد أدنى 3ث
+  }
 
   function snapToPOTime(secs) {
     if (!secs || secs <= 0) return 5;
@@ -206,8 +326,9 @@
   let fastCloseAt     = 0;
   let clockOffset     = 0;
   let currentBalance  = 0;
-  let tradeAmount     = CFG.DEFAULT_AMOUNT;
-  let _manualAmountOverride = false;
+  // [V22] استرجاع آخر مبلغ محفوظ — لا حاجة لتغييره كل تحديث
+  let tradeAmount     = (function(){ try { const v = parseFloat(W.localStorage.getItem('cb_amount')); return (Number.isFinite(v) && v > 0) ? v : CFG.DEFAULT_AMOUNT; } catch(_) { return CFG.DEFAULT_AMOUNT; } })();
+  let _manualAmountOverride = (function(){ try { return Number.isFinite(parseFloat(W.localStorage.getItem('cb_amount'))); } catch(_) { return false; } })();
   let _minConfThreshold = 75; // حد الثقة الأدنى — يتحكم به سلايدر الواجهة
   let accountBalance  = null;
   let _dynamicPayout  = null;
@@ -231,6 +352,8 @@
   let _signalPrice     = null;
   let _pendingIsTVE    = false;
   let _lossStreakPauseUntil = 0;
+  let _openTradesInFlight = 0;          // ✅ [FIX-C] عدد الصفقات المفتوحة فعلياً (لم تصل نتيجتها بعد)
+  let _inFlightDirection  = null;       // ✅ [FIX-C] اتجاه الصفقات المفتوحة الحالية
   let _ghostTradeActive = false;
   let _ghostWatching    = false;
   let _ghostConsecutive = 0;          // عداد الصفقات الوهمية المتتالية
@@ -241,6 +364,11 @@
   let _pendingRetrySignal = null;      // إشارة معلقة لإعادة المحاولة عند إعادة الاتصال
   let _lastTrendDirection = 'NEUTRAL';
   let _trendEmaStack = [];
+  // ✅ [V13.4] حالة الاستنفاد الاتجاهي + سجل أداء الأنماط الحي
+  let _exhaustDir   = null;    // 'UP' أو 'DOWN' — اتجاه آخر استنفاد مكتشف
+  let _exhaustUntil = 0;       // وقف اتجاه الاستمرار حتى هذا الوقت
+  let _lastExhaustLogTs = 0;   // ✅ [V14.2] تقييد تكرار سجل الاستنفاد
+  const _patternWL = {};       // { pattern: { w:عدد فوز, l:عدد خسارة } } — سجل حي لكل نمط
   let _lastWsErrorMsgTs = 0;                // تقييد رسائل خطأ المقابس
   const _executorPool = new Map();           // تجمع مقابس المنفذ: ws → { origSend, connectedAt, lastActivity, authed }
   const _wsLastActivity = new Map();         // آخر نشاط لكل مقبس
@@ -278,6 +406,103 @@
   const currentCandles   = {};
   const tickBuffers      = {};
   const chaforState      = {};
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // [V16] مختبر الأوراكل (OracleLab) — التقاط خام عالي الدقة لتطوير الأوراكل
+  //   الهدف: قياس كل تيك بدقة ميلي ثانية + ربط كل صفقة بمصدرها (chat/plat/slope)
+  //   ونتيجتها، لمعرفة أي مصدر أدقّ وتوسيع اصطياد الأوراكل بناءً على بيانات حقيقية.
+  // ═══════════════════════════════════════════════════════════════════════
+  const OracleLab = (function () {
+    const ticks = {};   // asset -> [{t,p}] حلقة بدقة ميلي ثانية
+    const stats = {
+      chat:  { w:0, l:0 },
+      plat:  { 0:{w:0,l:0}, 1:{w:0,l:0}, 2:{w:0,l:0}, 3:{w:0,l:0}, 4:{w:0,l:0} },
+      slope: { agree:{w:0,l:0}, against:{w:0,l:0}, flat:{w:0,l:0} },
+      total: 0,
+    };
+    function onTick(a, price, now) {
+      const buf = ticks[a] || (ticks[a] = []);
+      buf.push({ t: now, p: price });
+      const cut = now - 6000;
+      while (buf.length && buf[0].t < cut) buf.shift();
+      if (buf.length > 1500) buf.shift();
+    }
+    // الميل اللحظي على نافذة ms: عائد نسبي + فرق مطلق + عدد تيكات + المعدّل
+    function microSlope(a, ms) {
+      const buf = ticks[a]; if (!buf || buf.length < 2) return null;
+      const last = buf[buf.length - 1], p1 = last.p, now = last.t;
+      let i = buf.length - 1; while (i > 0 && buf[i].t > now - ms) i--;
+      const p0 = buf[i].p, dt = now - buf[i].t, n = buf.length - 1 - i;
+      if (!(p0 > 0) || dt <= 0) return null;
+      return { rel: (p1 - p0) / p0, abs: p1 - p0, dt, ticks: n, ratePerSec: n / (dt / 1000) };
+    }
+    // [V26] موضع آخر سعر ضمن مدى التيكات على نافذة ms: 0=القاع .. 1=القمة (لكشف الذروة اللحظية)
+    function microRangePos(a, ms) {
+      const buf = ticks[a]; if (!buf || buf.length < 2) return null;
+      const last = buf[buf.length - 1], now = last.t;
+      let i = buf.length - 1, hi = -Infinity, lo = Infinity, n = 0;
+      while (i >= 0 && buf[i].t >= now - ms) { const p = buf[i].p; if (p > hi) hi = p; if (p < lo) lo = p; n++; i--; }
+      if (!(hi > lo)) return { pos: 0.5, ticks: n, hi, lo, last: last.p };
+      return { pos: (last.p - lo) / (hi - lo), ticks: n, hi, lo, last: last.p };
+    }
+    function snapshot(a, dir) {
+      const os = (typeof DualWSSManager !== 'undefined' && DualWSSManager.oracleState)
+        ? DualWSSManager.oracleState(a) : {};
+      return {
+        dir,
+        chatDir: os.chatDir || null, chatTf: os.chatTf || null, chatAge: os.chatAge,
+        platBest: os.platBest || 0, platTf: os.platTf || {},
+        s200: microSlope(a, 200), s500: microSlope(a, 500), s1000: microSlope(a, 1000),
+      };
+    }
+    function _fmtSlope(s) {
+      if (!s) return '—';
+      return (s.rel >= 0 ? '+' : '') + (s.rel * 1e6).toFixed(1) + 'e-6(n' + s.ticks + ')';
+    }
+    function recordClose(rec, win, openPrice, closePrice) {
+      if (!CFG.ORACLE_LAB_ENABLED) return;
+      const f = rec && rec.lab; if (!f) return;
+      stats.total++;
+      const dir = f.dir, hit = win ? 'w' : 'l';
+      // ① مصدر الاتجاه: شات؟
+      const chatAgree = f.chatDir && f.chatDir === dir;
+      if (chatAgree) stats.chat[hit]++;
+      // ② قوة المنصة (الكود الرقمي 0-4)
+      const lvl = Math.max(0, Math.min(4, f.platBest | 0));
+      stats.plat[lvl][hit]++;
+      // ③ ميل التيك (الأجزاء): اتفاق/تعارض/مسطّح على نافذة 500ms
+      const s = f.s500;
+      let slopeCls = 'flat';
+      if (s && Math.abs(s.rel) >= (CFG.ORACLE_LAB_FLAT_REL || 1e-6)) {
+        const slopeDir = s.rel > 0 ? 'BUY' : 'SELL';
+        slopeCls = (slopeDir === dir) ? 'agree' : 'against';
+      }
+      stats.slope[slopeCls][hit]++;
+      // سطر خام مُعلَّم (قابل للتحليل لاحقاً)
+      const tfStr = Object.keys(f.platTf || {}).map(k => k + ':' + f.platTf[k]).join(',');
+      addLog('🧪 [LAB] ' + (win ? 'WIN ' : 'LOSS') + ' | ' + dir +
+             ' | chat=' + (f.chatDir ? (chatAgree ? f.chatDir + '✓' : f.chatDir + '✗') + '/' + (f.chatTf||'?') : '—') +
+             ' | plat=' + lvl + '{' + tfStr + '}' +
+             ' | slope500=' + _fmtSlope(s) + '[' + slopeCls + ']' +
+             ' | px ' + (openPrice||0).toFixed(5) + '→' + (closePrice||0).toFixed(5),
+             win ? 'signal' : 'error');
+      if (stats.total % (CFG.ORACLE_LAB_REPORT_EVERY || 10) === 0) report();
+    }
+    function _pct(o) { const t = o.w + o.l; return t ? Math.round(o.w / t * 100) + '% (' + o.w + '/' + t + ')' : '—'; }
+    function report() {
+      if (!CFG.ORACLE_LAB_ENABLED) return;
+      const p = stats.plat;
+      addLog('🧪 [LAB-REPORT] إجمالي:' + stats.total +
+             ' | شات:' + _pct(stats.chat) +
+             ' | plat4:' + _pct(p[4]) + ' plat3:' + _pct(p[3]) +
+             ' plat2:' + _pct(p[2]) + ' plat≤1:' + _pct({ w: p[0].w + p[1].w, l: p[0].l + p[1].l }) +
+             ' | ميل-موافق:' + _pct(stats.slope.agree) +
+             ' ميل-معاكس:' + _pct(stats.slope.against) +
+             ' ميل-مسطّح:' + _pct(stats.slope.flat), 'info');
+    }
+    return { onTick, microSlope, microRangePos, snapshot, recordClose, report, _stats: stats };
+  })();
+  try { W._oracleLabReport = () => OracleLab.report(); } catch (_) {}
 
   // ETC stubs
   const ETC_MAX_HIST     = 30;
@@ -345,7 +570,13 @@
   function loadStats() {
     try {
       const raw = localStorage.getItem('cb_v100_stats');
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const s = JSON.parse(raw);
+        // [V18] العدّادات المتتالية لا تُورَّث عبر تحديث الصفحة — جلسة جديدة = بداية نظيفة
+        // (كانت 3 خسائر قديمة تُسترجع وتُطلق RECALIBRATE فتوقف البوت 45ث عند الإقلاع)
+        s.lossStreak = 0; s.winStreak = 0;
+        return s;
+      }
     } catch(_) {}
     return { wins:0, losses:0, total:0, lossStreak:0, bestStreak:0, winStreak:0, tveWins:0, tveLosses:0, confWins:0, confLosses:0, doubles:0, doubleWins:0 };
   }
@@ -361,7 +592,8 @@
   function _safeAmount(amt) { return Math.max(1, Math.round(amt * 100) / 100); }
   function _rebuildPayloadCache() {
     const a = activeAsset || '';
-    const t = _tradeDuration > 0 ? _tradeDuration : snapToPOTime(candlePeriod || 5);
+    // ✅ [V14.3] الوقت المُرسَل = مدة المستخدم المختارة، مُثبّتة على مدة مسموحة فعلياً (يمنع IncorrectExpTime)
+    const t = _snapTradeDuration(_tradeDuration > 0 ? _tradeDuration : (candlePeriod || 3));
     const amt = tradeAmount;
     const d = isDemo;
     _payloadCache.prefixCall = '42["openOrder",{"asset":"'+a+'","amount":'+amt+',"action":"call","isDemo":'+d+',"requestId":';
@@ -375,10 +607,14 @@
   function _savePatternStats() {}
   function recordTrade(win, wasTVE) {
     STATS.total++;
+    // ملاحظة: تسجيل أداء النمط الحي يتم داخل DualWSSManager.onTradeResult (حيث النمط في النطاق)
     if (win) {
+      if (_openTradesInFlight > 0) _openTradesInFlight--;   // ✅ [FIX-C]
+      if (_openTradesInFlight === 0) _inFlightDirection = null;
       STATS.wins++; STATS.winStreak++; STATS.lossStreak=0;
       if(STATS.winStreak>STATS.bestStreak) STATS.bestStreak=STATS.winStreak;
       if(wasTVE) STATS.tveWins++;
+      if(_lastTradeWasDouble) STATS.doubleWins = (STATS.doubleWins||0) + 1;   // [V24.2] وصل عدّاد الفوز المزدوج (كان لا يُزاد أبداً)
       // فوز → إلغاء حالات الحماية
       _ghostTradeActive = false;
       _ghostWatching = false;
@@ -391,6 +627,8 @@
         DualWSSManager.onTradeResult(true, _pendingTradeRecord ? _pendingTradeRecord.direction : null);
       }
     } else {
+      if (_openTradesInFlight > 0) _openTradesInFlight--;   // ✅ [FIX-C]
+      if (_openTradesInFlight === 0) _inFlightDirection = null;
       STATS.losses++; STATS.lossStreak++; STATS.winStreak=0;
       if(wasTVE) STATS.tveLosses++;
       // ✅ وقف خسائر تدريجي: خسارة واحدة = 5ث، خسارتين = 10ث، 3+ = 15ث
@@ -408,6 +646,21 @@
   }
   function getIMDBTier() { return 0; }
   function canIMDB() { return false; }
+  // ✅ [FIX-A/C] حارس موحّد قبل أي إرسال أمر — يُرجع true إذا وجب الرفض
+  function _shouldBlockSend(direction, asset) {
+    // FIX-A: الزوج المُرسَل يجب أن يطابق الزوج النشط (تيار السعر)
+    const a = normalizeAsset(asset || activeAsset);
+    if (!a || a !== activeAsset) {
+      addLog('🚫 [FIX-A] رفض — الزوج (' + a + ') لا يطابق النشط (' + activeAsset + ') | تداخل أزواج', 'error');
+      return true;
+    }
+    // FIX-C: لا صفقة جديدة في نفس الاتجاه ما دامت صفقة سابقة مفتوحة
+    if (_openTradesInFlight > 0 && _inFlightDirection === direction) {
+      addLog('🚫 [FIX-C] رفض — صفقة ' + direction + ' مفتوحة (' + _openTradesInFlight + ') ولم تصل نتيجتها', 'error');
+      return true;
+    }
+    return false;
+  }
   function executeTrade(direction, asset, overrideAmount) {
     if (!autoTrade) return;
     if (tradeExec) return;
@@ -415,10 +668,11 @@
       addLog('❌ لا يوجد مقبس تداول متاح', 'error');
       return;
     }
+    if (_shouldBlockSend(direction, asset)) return;   // ✅ [FIX-A/C]
     const action = direction === 'BUY' ? 'call' : 'put';
     const amt = overrideAmount || tradeAmount;
     const safeAmt = _safeAmount(amt);
-    const tradeSec = _tradeDuration || snapToPOTime(candlePeriod || 5);
+    const tradeSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 3));
     const rid = _nextReqId();
     if (!_payloadCache.prefixCall) _rebuildPayloadCache();
     const prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
@@ -426,9 +680,11 @@
     const msg = prefix + rid + suffix;
     try {
       tradeWSOrig(msg);
+      _openTradesInFlight++; _inFlightDirection = direction;   // ✅ [FIX-C]
       tradeExec = true;
       lastTradeMs = Date.now();
       _pendingTradeRecord = { asset: asset || activeAsset, direction, amount: safeAmt, openTs: Date.now(), source: 'directWS' };
+      try { const _la = normalizeAsset(asset || activeAsset); const _tb = tickBuffers[_la]; _pendingTradeRecord.lab = OracleLab.snapshot(_la, direction); _pendingTradeRecord.openPrice = (_tb && _tb.length) ? _tb[_tb.length-1] : 0; } catch(_) {}  // [V16] لقطة ميزات الأوراكل عند الفتح
       addLog('⚡ [EXEC] ' + direction + ' | ' + (asset || activeAsset) + ' | $' + safeAmt + ' | ' + tradeSec + 'ث', 'signal');
       updateTradeBtn();
       // ✅ تحرير تلقائي لـ tradeExec بعد مدة الصفقة + 5 ثواني أمان
@@ -437,6 +693,7 @@
       _tradeExecTimeout = setTimeout(() => {
         if (tradeExec) {
           tradeExec = false;
+          _openTradesInFlight = 0; _inFlightDirection = null;   // ✅ [FIX-C] أمان
           addLog('⏰ [TRADE-EXEC] تحرير تلقائي — لم تأتِ نتيجة الصفقة خلال ' + (tradeSec + 5) + 'ث', 'info');
           updateTradeBtn();
         }
@@ -1037,6 +1294,11 @@
   }
 
   function _extractFastCloseAt(settings, fullPayload) {
+    // ✅ [V14.3] التقط مدة المستخدم المختارة (زر S3/S15/...) من إعدادات الشارت أيضاً
+    try {
+      const ft = parseInt(settings && settings.fastTimeframe, 10);
+      if (Number.isFinite(ft) && ft >= 1 && ft !== _tradeDuration) { _tradeDuration = ft; _rebuildPayloadCache(); }
+    } catch(_) {}
     const fca = parseInt(settings.fastCloseAt || (fullPayload && fullPayload.fastCloseAt) || 0, 10);
     if (!Number.isFinite(fca) || fca <= 0) return;
     fastCloseAt = fca * 1000;
@@ -1117,7 +1379,7 @@
         if (q1Match(bytes, Q1_SIG.TICK_ARRAY)) {
           try {
             const txt = new TextDecoder().decode(bytes), start = txt.indexOf('[[');
-            if (start >= 0) { const arr = JSON.parse(txt.slice(start)); const tick = extractTickFromArray(arr); if (tick) { onTick(tick.asset, tick.price, tick.ts); return; } }
+            if (start >= 0) { const arr = JSON.parse(txt.slice(start)); const tick = extractTickFromArray(arr); if (tick) { onTick(tick.asset, tick.price, tick.ts, wsRef && wsRef._dualRole); return; } }
           } catch (_) {}
         }
       }
@@ -1129,7 +1391,7 @@
       if (decoded !== null && typeof decoded === 'object') {
         if (evName==='successauth') { if (wsRef && wsRef===tradeWS) { _tradeSocketReady = true; addLog('✅ مقبس مصادَق', 'signal'); _startAdaptiveSigmaDecayTimerLocal(); } return; }
         const tick = extractTickFromArray(decoded);
-        if (tick) { onTick(tick.asset, tick.price, tick.ts); return; }
+        if (tick) { onTick(tick.asset, tick.price, tick.ts, wsRef && wsRef._dualRole); return; }
         if (evName==='chafor') { const cf = extractChafor(decoded); if (cf) { onChafor(cf.asset, cf.seconds); return; } }
         if (evName==='updateCharts' && Array.isArray(decoded)) {
           for (const chart of decoded) {
@@ -1149,12 +1411,16 @@
         if (start < 0) return;
         const obj = JSON.parse(text.slice(start));
         if (evName==='updateHistoryNewFast' && obj.asset && Array.isArray(obj.history)) { processHistoryFast(obj.asset, obj.period, obj.history); return; }
+        // ✅ [V14] أوراكل المنصة: قوة الإشارة الرقمية لكل زوج×فريم (المصدر الصحيح)
+        if ((evName==='signals/update' || evName==='signals/load') && obj && Array.isArray(obj.signals)) {
+          try { DualWSSManager.onSignalsUpdate(obj.signals); } catch(_){} return;
+        }
         if (evName==='successcloseOrder'   && obj.deals) { processCloseOrder(obj); return; }
         if (evName==='failopenOrder' && obj.error) { onFailOrder(obj); return; }
         if (evName==='successupdateBalance' && obj.balance !== undefined) { onBalanceUpdate(obj); return; }
         if (evName==='successopenOrder' && obj.id) { onOpenOrderSuccess(obj); return; }
         const tick = extractTickFromArray(Array.isArray(obj) ? obj : [obj]);
-        if (tick) { onTick(tick.asset, tick.price, tick.ts); return; }
+        if (tick) { onTick(tick.asset, tick.price, tick.ts, wsRef && wsRef._dualRole); return; }
         if (evName==='chafor') { const cf = extractChafor(Array.isArray(obj)?obj:[obj]); if (cf) onChafor(cf.asset, cf.seconds); }
         if (evName==='saveCharts') { const s = obj.settings || obj; _extractFastCloseAt(s, obj); }
       } catch (_) {}
@@ -1183,10 +1449,21 @@
     const evName = payload[0], data = payload[1];
     if (evName==='successauth') { if (wsRef && wsRef===tradeWS) { _tradeSocketReady = true; addLog('✅ مقبس مصادَق', 'signal'); _startAdaptiveSigmaDecayTimerLocal(); } return; }
     if (['updateStream','tick','quote','stream'].includes(evName)) {
-      const tick = extractTickFromArray(data); if (tick) { onTick(tick.asset, tick.price, tick.ts); return; }
-      if (Array.isArray(data)) { for (const item of data) { const t = extractTickFromArray(Array.isArray(item)?item:[item]); if (t) onTick(t.asset,t.price,t.ts); } }
+      const tick = extractTickFromArray(data); if (tick) { onTick(tick.asset, tick.price, tick.ts, wsRef && wsRef._dualRole); return; }
+      if (Array.isArray(data)) { for (const item of data) { const t = extractTickFromArray(Array.isArray(item)?item:[item]); if (t) onTick(t.asset,t.price,t.ts, wsRef && wsRef._dualRole); } }
     }
     if (evName==='chafor') { const cf = extractChafor(Array.isArray(data)?data:[data]); if (cf) onChafor(cf.asset, cf.seconds); }
+    // ✅ [V14] إشارة الشات الاتجاهية (UP2/DOWN2) — الأوراكل الاتجاهي الصريح
+    if (evName==='chat_room_list_update' && data && data.message && data.message.message_content && data.message.message_content.signal) {
+      try { DualWSSManager.onChatSignal(data.message.message_content.signal); } catch(_){}
+    }
+    if (evName==='chat_room_list' && data && Array.isArray(data.list)) {
+      try { for (const it of data.list) { const s = it && it.message_content && it.message_content.signal; if (s) DualWSSManager.onChatSignal(s); } } catch(_){}
+    }
+    // ✅ [V14] بعض signals/update قد تصل نصاً 42 أيضاً
+    if ((evName==='signals/update' || evName==='signals/load') && data && Array.isArray(data.signals)) {
+      try { DualWSSManager.onSignalsUpdate(data.signals); } catch(_){}
+    }
     if (evName==='changeSymbol' && data?.asset) onActiveAsset(data.asset, 'changeSymbol');
     if (evName==='saveCharts') { const s = (data&&data.settings)||data||{}; _extractFastCloseAt(s, data||{}); }
 
@@ -1199,6 +1476,10 @@
           const signalAsset = typeof data[0]==='string' ? normalizeAsset(data[0]) : activeAsset;
           const signalPrice = typeof data[2]==='number' ? data[2] : 0;
           const signalDir = Array.isArray(data[1]) ? (data[1][0] > 0 ? 'BUY' : 'SELL') : null;
+          // ✅ [V13.5/المسار C] غذِّ مخزن الأوراكل بسعر signals (الفيد الأسرع يبثّه أساساً عبر هذا الحدث)
+          if (signalPrice > 0 && wsRef && wsRef._dualRole === 'oracle' && typeof DualWSSManager !== 'undefined') {
+            try { DualWSSManager.recordOracleTick(signalAsset, signalPrice); } catch(_) {}
+          }
           if (signalDir) {
             if (typeof DualWSSManager !== 'undefined') {
               DualWSSManager.onPlatformSignal({ asset: signalAsset, direction: signalDir, price: signalPrice, confidence: 75 });
@@ -1296,7 +1577,12 @@
   }
 
   function processCloseOrder(data) {
-    if (!data.deals || !data.deals[0]) return;
+    if (!data.deals || !data.deals.length) return;
+    // [V24-2X] قد تُغلق صفقتان معاً في نفس الحدث — عالج كل صفقات البوت
+    if (data.deals.length > 1) {
+      for (const d of data.deals) processCloseOrder({ deals: [d] });
+      return;
+    }
     const deal = data.deals[0];
     if (botOrderIds.size > 0 && !botOrderIds.has(deal.id)) { addLog('📊 صفقة منصة: '+(deal.profit>0?'+':'')+(deal.profit||0).toFixed(2)+'$','info'); return; }
     if (deal.id) botOrderIds.delete(deal.id);
@@ -1313,6 +1599,7 @@
       if (win) addLog('📊 [PAYOUT] نسبة العائد: ' + Math.round(rawPayout * 100) + '%', 'info');
     }
     recordTrade(win, _lastTradeWasTVE);
+    try { OracleLab.recordClose(_pendingTradeRecord, win, _pendingTradeRecord && _pendingTradeRecord.openPrice, deal.closePrice || deal.price || 0); } catch(_) {}  // [V16] ربط النتيجة بمصدر الأوراكل
     const sym = win ? '✅' : '❌', amount = win ? '+'+deal.profit?.toFixed(2)+'$' : '-'+deal.amount+'$';
     addLog(sym+' '+amount, win?'signal':'error');
     _lastTradeWasDouble = false; tradeExec = false; updateTradeBtn();
@@ -1382,11 +1669,22 @@
     _rebuildPayloadCache(); updateHUD();
   }
 
-  function onTick(asset, price, serverTs) {
+  function onTick(asset, price, serverTs, srcRole) {
     // Simplified: just record tick data, update HUD price, feed diagnostic engine
     PERF.mark('tickRecv');
     if (!asset || !price || isNaN(price)) return;
     const a = normalizeAsset(asset), now = Date.now();
+    // ✅ [V24] دقة الملي‑ثانية: استخدم توقيت الخادم (updateStream[1]) للميل اللحظي بدل التوقيت المحلي
+    //   (الـspy كشف: التيك = [الزوج, توقيت‑الخادم.ملي, السعر]). نتحقق أنه ضمن ±5ث من المحلي.
+    let labTs = now;
+    if (typeof serverTs === 'number' && serverTs > 1e9 && serverTs < 1e11) {
+      const sMs = Math.round(serverTs * 1000);
+      if (Math.abs(sMs - now) < 5000) labTs = sMs;
+    }
+    // ✅ [V13.5/المسار C] افصل تيكات الأوراكل (الفيد الأسرع) لفلتر التأكيد الكموني
+    if (srcRole === 'oracle') {
+      try { DualWSSManager.recordOracleTick(a, price); } catch(_) {}
+    }
     _lastTickMs = now;
     if (_streamStalled) {
       _streamStalled = false;
@@ -1396,6 +1694,8 @@
     if (!tickBuffers[a]) tickBuffers[a] = [];
     tickBuffers[a].push(price);
     if (tickBuffers[a].length > 600) tickBuffers[a].shift();
+    try { OracleLab.onTick(a, price, labTs); } catch(_) {}   // [V16+V24] التقاط خام بتوقيت الخادم الدقيق
+    try { if (a === activeAsset && typeof DualWSSManager !== 'undefined') { DualWSSManager.fastEval(a); DualWSSManager.tickPulse(a); } } catch(_) {}  // [V18] تقييم سريع + [V24] نبض التيكات
     totalTicks++;
     if (!activeAsset) onActiveAsset(a, 'firstTick');
     const cc = currentCandles[a];
@@ -1506,112 +1806,130 @@
   /* ══ ROOT ══ */
   #cbRoot{position:fixed;bottom:16px;left:16px;z-index:2147483647;font-family:'IBM Plex Sans Arabic',-apple-system,BlinkMacSystemFont,sans-serif;direction:rtl;}
   /* ══ LAUNCHER ICON ══ */
-  #cbIcon{width:50px;height:50px;border-radius:15px;background:#fff;border:1.5px solid #D1E8DC;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 18px rgba(30,58,47,0.14);transition:all 0.2s ease;}
-  #cbIcon:hover{transform:scale(1.05);box-shadow:0 6px 24px rgba(30,58,47,0.20);}
+  #cbIcon{width:50px;height:50px;border-radius:15px;background:linear-gradient(145deg,#13212e,#0c1a16);border:1.5px solid #2a4a3c;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,0.5),0 0 18px rgba(0,210,100,0.25);transition:all 0.2s ease;animation:cbBorderGlow 6s ease-in-out infinite;}
+  #cbIcon:hover{transform:scale(1.08);box-shadow:0 6px 26px rgba(0,0,0,0.55),0 0 26px rgba(0,210,100,0.4);}
   #cbIcon.buy{border-color:#86EFAC;box-shadow:0 4px 18px rgba(22,163,74,0.18);}
   #cbIcon.sell{border-color:#FCA5A5;box-shadow:0 4px 18px rgba(220,38,38,0.18);}
   #cbIconSig{font-size:20px;}
-  #cbIconDot{width:6px;height:6px;border-radius:50%;background:#D1D5DB;margin-top:3px;transition:background 0.3s;}
+  #cbIconDot{width:6px;height:6px;border-radius:50%;background:#33485a;margin-top:3px;transition:background 0.3s;}
   #cbIconDot.on{background:#16A34A;}
-  /* ══ MAIN PANEL ══ */
-  #cbPanel{position:fixed;bottom:76px;left:8px;width:300px;background:#F8F5F0;border:1px solid #E5DDD5;border-radius:20px;box-shadow:0 8px 40px rgba(0,0,0,0.11);display:none;flex-direction:column;overflow:hidden;max-height:calc(100svh - 120px);touch-action:none;}
+  /* ══ MAIN PANEL — [V22] دارك خرافي ══ */
+  @keyframes cbHueShift{0%{filter:hue-rotate(0deg);}100%{filter:hue-rotate(360deg);}}
+  @keyframes cbGradFlow{0%{background-position:0% 50%;}50%{background-position:100% 50%;}100%{background-position:0% 50%;}}
+  @keyframes cbBorderGlow{0%,100%{box-shadow:0 8px 40px rgba(0,0,0,0.5),0 0 22px rgba(0,210,100,0.18),inset 0 0 0 1px rgba(0,210,100,0.10);}50%{box-shadow:0 8px 44px rgba(0,0,0,0.55),0 0 30px rgba(0,170,255,0.22),inset 0 0 0 1px rgba(0,170,255,0.14);}}
+  @keyframes cbWmFloat{0%{transform:translate(-50%,-50%) rotate(-18deg) scale(1);opacity:0.05;}50%{transform:translate(-50%,-54%) rotate(-18deg) scale(1.08);opacity:0.09;}100%{transform:translate(-50%,-50%) rotate(-18deg) scale(1);opacity:0.05;}}
+  #cbPanel{position:fixed;bottom:76px;left:8px;width:300px;background:linear-gradient(165deg,#0d1722 0%,#0a1219 60%,#0c1a16 100%);border:1px solid #243443;border-radius:20px;display:none;flex-direction:column;overflow:hidden;max-height:calc(100svh - 120px);touch-action:none;animation:cbBorderGlow 6s ease-in-out infinite;}
+  /* العلامة المائية المتحركة خلف المحتوى */
+  #cbPanel::before{content:'⚡ QUANTUM';position:absolute;top:50%;left:50%;font-size:54px;font-weight:900;letter-spacing:2px;color:transparent;background:linear-gradient(90deg,#00d264,#00aaff,#9b5cff,#00d264);-webkit-background-clip:text;background-clip:text;white-space:nowrap;pointer-events:none;z-index:0;animation:cbWmFloat 9s ease-in-out infinite;}
+  #cbScrollArea,.cb-hdr,#cbStatus{position:relative;z-index:1;}
   #cbPanel.open{display:flex;}
   #cbPanel.minimized #cbScrollArea{display:none;}
   @media(max-width:480px){#cbPanel{width:calc(100vw - 16px);left:8px;bottom:72px;max-height:calc(100svh - 130px);}}
   @media(min-width:768px){#cbPanel{width:320px;}}
   /* ══ HEADER ══ */
-  .cb-hdr{display:flex;align-items:center;gap:8px;padding:12px 14px;cursor:grab;flex-shrink:0;background:#fff;border-bottom:1px solid #EDE8E2;border-radius:20px 20px 0 0;}
+  .cb-hdr{display:flex;align-items:center;gap:8px;padding:12px 14px;cursor:grab;flex-shrink:0;background:linear-gradient(100deg,#11202c,#0e2b22);border-bottom:1px solid #243443;border-radius:20px 20px 0 0;}
   .cb-hdr:active{cursor:grabbing;}
-  .cb-hdr-dot{width:8px;height:8px;border-radius:50%;background:#D1D5DB;flex-shrink:0;transition:background 0.3s;}
-  .cb-hdr-dot.on{background:#16A34A;box-shadow:0 0 0 3px rgba(22,163,74,0.15);}
-  .cb-ttl{font-size:11px;font-weight:700;color:#1E3A2F;letter-spacing:0.3px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .cb-hdr-dot{width:8px;height:8px;border-radius:50%;background:#56707f;flex-shrink:0;transition:background 0.3s;}
+  .cb-hdr-dot.on{background:#00d264;box-shadow:0 0 0 3px rgba(0,210,100,0.18),0 0 12px rgba(0,210,100,0.6);animation:cbBorderGlow 3s ease-in-out infinite;}
+  .cb-ttl{font-size:12px;font-weight:800;letter-spacing:0.6px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:linear-gradient(90deg,#00d264,#3fe0ff,#9b8cff,#00d264);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:cbGradFlow 5s linear infinite;text-shadow:0 0 18px rgba(0,210,100,0.25);}
   .cb-hdr-actions{display:flex;gap:4px;flex-shrink:0;}
-  .cb-icon-btn{width:24px;height:24px;border-radius:8px;background:#F3EDE7;border:1px solid #E5DDD5;color:#6B7280;font-family:inherit;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s;}
-  .cb-icon-btn:hover{background:#FFE4E4;border-color:#FCA5A5;color:#DC2626;}
+  .cb-icon-btn{width:24px;height:24px;border-radius:8px;background:#1b2a36;border:1px solid #243443;color:#9fb2c0;font-family:inherit;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s;}
+  .cb-icon-btn:hover{background:#3a1a1a;border-color:#FCA5A5;color:#DC2626;}
   /* ══ SCROLL AREA ══ */
-  #cbScrollArea{overflow-y:auto;flex:1;background:#F8F5F0;}
+  #cbScrollArea{overflow-y:auto;flex:1;background:#0c151c;}
   #cbScrollArea::-webkit-scrollbar{width:3px;}
-  #cbScrollArea::-webkit-scrollbar-thumb{background:#D1C8BE;border-radius:3px;}
+  #cbScrollArea::-webkit-scrollbar-thumb{background:#33485a;border-radius:3px;}
   /* ══ STATS GRID ══ */
   .cb-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:10px 10px 0;}
-  .cb-stat{background:#fff;border:1px solid #EDE8E2;border-radius:10px;padding:7px 9px;border-right:3px solid #1E3A2F;}
-  .cb-stat-lbl{display:block;font-size:8.5px;color:#9CA3AF;margin-bottom:3px;font-weight:500;}
-  .cb-stat-val{font-size:11px;font-weight:700;color:#1A1A1A;}
-  .cb-stat-val.w{color:#1E3A2F;}.cb-stat-val.g{color:#16A34A;}.cb-stat-val.y{color:#D97706;}
+  /* [V25] شريط الفرص المتحرك (أكثر الأزواج حركة + العائد) */
+  .cb-marquee{margin:8px 10px 0;overflow:hidden;white-space:nowrap;background:linear-gradient(90deg,#0c1620,#16222e,#0c1620);border:1px solid #243443;border-radius:9px;height:24px;line-height:24px;position:relative;box-shadow:inset 0 0 8px rgba(0,0,0,0.4);}
+  .cb-marquee-track{display:inline-block;padding-left:100%;animation:cbMarq 22s linear infinite;font-size:11px;font-weight:700;}
+  .cb-marquee:hover .cb-marquee-track{animation-play-state:paused;}
+  .cb-marq-item{display:inline-block;margin:0 14px;}
+  .cb-marq-otc{color:#00d264;}
+  .cb-marq-pay{color:#ffd24a;}
+  .cb-marq-up{color:#00d264;}
+  .cb-marq-dn{color:#ff5b6e;}
+  .cb-marq-hot{color:#ff9f1c;}
+  .cb-marq-sep{color:#3a4d5e;margin:0 2px;}
+  @keyframes cbMarq{0%{transform:translateX(0);}100%{transform:translateX(-100%);}}  .cb-stat{background:#16222e;border:1px solid #243443;border-radius:10px;padding:7px 9px;border-right:3px solid #1E3A2F;}
+  .cb-stat-lbl{display:block;font-size:8.5px;color:#7c8d9b;margin-bottom:3px;font-weight:500;}
+  .cb-stat-val{font-size:11px;font-weight:700;color:#eef3f7;}
+  .cb-stat-val.w{color:#46d98e;}.cb-stat-val.g{color:#16A34A;}.cb-stat-val.y{color:#D97706;}
   /* ══ INDICATOR ROWS ══ */
   .cb-ind-row{display:flex;align-items:center;gap:6px;padding:5px 10px 0;font-size:9px;}
-  .cb-ind-lbl{color:#6B7280;flex-shrink:0;min-width:52px;font-weight:500;}
-  .cb-ind-val{font-family:'SF Mono',ui-monospace,monospace;color:#374151;font-size:9px;flex:1;}
-  .cb-ind-badge{font-size:8px;font-weight:700;padding:2px 7px;border-radius:20px;background:#F3EDE7;border:1px solid #E5DDD5;color:#6B7280;flex-shrink:0;}
-  .cb-ind-badge.up{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .cb-ind-badge.dn{background:#FEF2F2;border-color:#FCA5A5;color:#DC2626;}
-  .cb-ind-badge.yw{background:#FFFBEB;border-color:#FCD34D;color:#D97706;}
+  .cb-ind-lbl{color:#9fb2c0;flex-shrink:0;min-width:52px;font-weight:500;}
+  .cb-ind-val{font-family:'SF Mono',ui-monospace,monospace;color:#dfe7ee;font-size:9px;flex:1;}
+  .cb-ind-badge{font-size:8px;font-weight:700;padding:2px 7px;border-radius:20px;background:#1b2a36;border:1px solid #243443;color:#9fb2c0;flex-shrink:0;}
+  .cb-ind-badge.up{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .cb-ind-badge.dn{background:#2a1416;border-color:#FCA5A5;color:#DC2626;}
+  .cb-ind-badge.yw{background:#2a2410;border-color:#FCD34D;color:#D97706;}
   /* ══ CONFIDENCE BAR ══ */
   .cb-conf-bar{display:flex;align-items:center;gap:6px;padding:8px 10px 0;font-size:9px;}
-  .cb-conf-lbl{color:#6B7280;flex-shrink:0;font-weight:500;}
-  .cb-conf-score{font-family:'SF Mono',ui-monospace,monospace;font-size:12px;font-weight:700;color:#1E3A2F;}
-  .cb-conf-track{flex:1;height:5px;border-radius:3px;background:#E5DDD5;overflow:hidden;}
+  .cb-conf-lbl{color:#9fb2c0;flex-shrink:0;font-weight:500;}
+  .cb-conf-score{font-family:'SF Mono',ui-monospace,monospace;font-size:12px;font-weight:700;color:#46d98e;}
+  .cb-conf-track{flex:1;height:5px;border-radius:3px;background:#243443;overflow:hidden;}
   .cb-conf-fill{height:100%;border-radius:3px;transition:width 0.3s,background 0.3s;}
-  .cb-conf-detail{font-size:7.5px;color:#9CA3AF;padding:2px 10px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cb-conf-detail{font-size:7.5px;color:#7c8d9b;padding:2px 10px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   /* ══ DOUBLE BADGE ══ */
   .cb-dbl-row{display:flex;align-items:center;gap:6px;padding:4px 10px 0;}
-  .cb-dbl-badge{font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:#FFFBEB;border:1px solid #FCD34D;color:#D97706;opacity:0.6;}
-  .cb-dbl-badge.active{opacity:1;background:#FEF3C7;border-color:#F59E0B;color:#B45309;animation:dblPulse 0.8s ease-in-out infinite;}
+  .cb-dbl-badge{font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:#2a2410;border:1px solid #FCD34D;color:#D97706;opacity:0.6;}
+  .cb-dbl-badge.active{opacity:1;background:#2a2410;border-color:#F59E0B;color:#f0a850;animation:dblPulse 0.8s ease-in-out infinite;}
   @keyframes dblPulse{0%,100%{opacity:1;}50%{opacity:0.6;}}
   /* ══ PAUSE / VOL / BAD-SESSION ══ */
-  .cb-pause-bar{display:none;align-items:center;justify-content:center;padding:6px 10px;background:#FEF2F2;border:1px solid #FCA5A5;margin:6px 10px 0;border-radius:10px;}
+  .cb-pause-bar{display:none;align-items:center;justify-content:center;padding:6px 10px;background:#2a1416;border:1px solid #FCA5A5;margin:6px 10px 0;border-radius:10px;}
   .cb-pause-bar.active{display:flex;}
   .cb-pause-txt{font-size:9px;font-weight:700;color:#DC2626;}
   .cb-vol-bar{display:none;align-items:center;justify-content:center;gap:6px;padding:4px 10px;margin:4px 10px 0;border-radius:10px;font-size:9px;font-weight:700;}
-  .cb-vol-bar.squeeze{display:flex;background:#EFF6FF;border:1px solid #BFDBFE;color:#2563EB;}
-  .cb-vol-bar.explosive{display:flex;background:#FFF7ED;border:1px solid #FDBA74;color:#EA580C;}
-  .cb-bad-sess{display:none;align-items:center;justify-content:center;padding:8px 10px;margin:6px 10px 0;border-radius:10px;font-size:10px;font-weight:800;background:#FEF2F2;border:1.5px solid #FCA5A5;color:#DC2626;}
+  .cb-vol-bar.squeeze{display:flex;background:#15233a;border:1px solid #1e3a5f;color:#2563EB;}
+  .cb-vol-bar.explosive{display:flex;background:#2a1f10;border:1px solid #FDBA74;color:#EA580C;}
+  .cb-bad-sess{display:none;align-items:center;justify-content:center;padding:8px 10px;margin:6px 10px 0;border-radius:10px;font-size:10px;font-weight:800;background:#2a1416;border:1.5px solid #FCA5A5;color:#DC2626;}
   .cb-bad-sess.active{display:flex;animation:cbBadSessPulse 2s infinite;}
   @keyframes cbBadSessPulse{0%,100%{opacity:1;}50%{opacity:0.7;}}
   /* ══ WIN/LOSS STATS ══ */
   .cb-stats-bar{display:flex;gap:5px;padding:8px 10px 0;}
-  .cb-stt{flex:1;background:#fff;border:1px solid #EDE8E2;border-radius:10px;padding:6px 7px;text-align:center;}
-  .cb-stt-lbl{display:block;font-size:7.5px;color:#9CA3AF;margin-bottom:3px;font-weight:500;}
-  .cb-stt-val{font-size:13px;font-weight:700;color:#1A1A1A;}
+  .cb-stt{flex:1;background:#16222e;border:1px solid #243443;border-radius:10px;padding:6px 7px;text-align:center;}
+  .cb-stt-lbl{display:block;font-size:7.5px;color:#7c8d9b;margin-bottom:3px;font-weight:500;}
+  .cb-stt-val{font-size:13px;font-weight:700;color:#eef3f7;}
   .cb-stt-val.g{color:#16A34A;}.cb-stt-val.r{color:#DC2626;}.cb-stt-val.y{color:#D97706;}
   /* ══ SIGNAL BOX ══ */
   .cb-sig-wrap{padding:10px 10px 0;}
-  .cb-sig-box{background:#fff;border:1.5px solid #EDE8E2;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden;}
-  .cb-sig-box.buy{background:#F0FDF4;border-color:#1E3A2F;}
-  .cb-sig-box.sell{background:#FEF2F2;border-color:#DC2626;}
-  .cb-sig-main{font-size:18px;font-weight:800;letter-spacing:0.5px;color:#1A1A1A;}
-  .cb-sig-main.BUY{color:#1E3A2F;}.cb-sig-main.SELL{color:#DC2626;}.cb-sig-main.HOLD{color:#9CA3AF;font-size:15px;font-weight:500;}
-  .cb-sig-sub{font-size:10px;color:#6B7280;}
-  .cb-sig-badge{font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:#F3EDE7;border:1px solid #E5DDD5;color:#6B7280;align-self:flex-start;}
-  .cb-sig-badge.b5{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .cb-sig-badge.b4{background:#F0FDF4;border-color:#BBF7D0;color:#22C55E;}
-  .cb-sig-badge.b3{background:#FFFBEB;border-color:#FCD34D;color:#D97706;}
-  .cb-sig-badge.tve{background:#FFFBEB;border-color:#FCD34D;color:#D97706;}
+  .cb-sig-box{background:#16222e;border:1.5px solid #243443;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden;}
+  .cb-sig-box.buy{background:#0f2a1c;border-color:#46d98e;}
+  .cb-sig-box.sell{background:#2a1416;border-color:#DC2626;}
+  .cb-sig-main{font-size:18px;font-weight:800;letter-spacing:0.5px;color:#eef3f7;}
+  .cb-sig-main.BUY{color:#46d98e;}.cb-sig-main.SELL{color:#DC2626;}.cb-sig-main.HOLD{color:#7c8d9b;font-size:15px;font-weight:500;}
+  .cb-sig-sub{font-size:10px;color:#9fb2c0;}
+  .cb-sig-badge{font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:#1b2a36;border:1px solid #243443;color:#9fb2c0;align-self:flex-start;}
+  .cb-sig-badge.b5{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .cb-sig-badge.b4{background:#0f2a1c;border-color:#BBF7D0;color:#22C55E;}
+  .cb-sig-badge.b3{background:#2a2410;border-color:#FCD34D;color:#D97706;}
+  .cb-sig-badge.tve{background:#2a2410;border-color:#FCD34D;color:#D97706;}
   /* ══ PATTERN PERFORMANCE ══ */
   .cb-ppt-sect{padding:8px 10px 0;}
-  .cb-section-lbl{font-size:9px;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;display:flex;align-items:center;gap:6px;}
-  .cb-section-lbl::after{content:'';flex:1;height:1px;background:#EDE8E2;}
+  .cb-section-lbl{font-size:9px;font-weight:700;color:#9fb2c0;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;display:flex;align-items:center;gap:6px;}
+  .cb-section-lbl::after{content:'';flex:1;height:1px;background:#243443;}
   .cb-ppt-row{display:flex;align-items:center;gap:4px;padding:2px 0;font-size:8px;}
-  .cb-ppt-name{flex:1;color:#6B7280;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .cb-ppt-name{flex:1;color:#9fb2c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .cb-ppt-wr{font-family:'SF Mono',ui-monospace,monospace;min-width:28px;text-align:right;font-weight:700;}
   .cb-ppt-wr.good{color:#16A34A;}.cb-ppt-wr.mid{color:#D97706;}.cb-ppt-wr.bad{color:#DC2626;}
   /* ══ CANDLE ROW ══ */
   .cb-candle-sect{padding:10px 10px 0;}
   .cb-candle-row{display:flex;gap:4px;align-items:flex-end;flex-wrap:wrap;min-height:34px;}
   .cb-c{width:26px;height:26px;border-radius:6px;border:1.5px solid;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;}
-  .cb-c.bull{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .cb-c.bear{background:#FEF2F2;border-color:#FCA5A5;color:#DC2626;}
+  .cb-c.bull{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .cb-c.bear{background:#2a1416;border-color:#FCA5A5;color:#DC2626;}
   .cb-c.hist{opacity:0.6;}.cb-c.forming{opacity:0.5;border-style:dashed;animation:formPulse 1.2s ease-in-out infinite;}
   @keyframes formPulse{0%,100%{opacity:0.4;}50%{opacity:0.8;}}
   /* ══ SEPARATOR ══ */
-  .cb-sep{height:1px;background:#EDE8E2;margin:11px 0 0;}
+  .cb-sep{height:1px;background:#243443;margin:11px 0 0;}
   /* ══ AMOUNT ══ */
   .cb-amount-row{display:flex;align-items:center;gap:8px;padding:10px 10px 0;}
-  .cb-amount-lbl{font-size:10px;color:#6B7280;flex-shrink:0;font-weight:600;}
-  .cb-amount-inp{flex:1;background:#fff;border:1px solid #E5DDD5;border-radius:10px;padding:6px 10px;color:#1A1A1A;font-family:inherit;font-size:13px;font-weight:700;text-align:center;outline:none;transition:border-color 0.2s;}
-  .cb-amount-inp:focus{border-color:#1E3A2F;}
-  .cb-demo-badge{font-size:9px;font-weight:700;padding:3px 9px;border-radius:20px;background:#FFFBEB;border:1px solid #FCD34D;color:#D97706;flex-shrink:0;}
-  .cb-demo-badge.real{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
+  .cb-amount-lbl{font-size:10px;color:#9fb2c0;flex-shrink:0;font-weight:600;}
+  .cb-amount-inp{flex:1;background:#16222e;border:1px solid #243443;border-radius:10px;padding:6px 10px;color:#eef3f7;font-family:inherit;font-size:13px;font-weight:700;text-align:center;outline:none;transition:border-color 0.2s;}
+  .cb-amount-inp:focus{border-color:#46d98e;}
+  .cb-demo-badge{font-size:9px;font-weight:700;padding:3px 9px;border-radius:20px;background:#2a2410;border:1px solid #FCD34D;color:#D97706;flex-shrink:0;}
+  .cb-demo-badge.real{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
   /* ══ MANUAL BUY/SELL BUTTONS ══ */
   .cb-manual-row{display:flex;gap:8px;padding:8px 10px;}
   .cb-manual-btn{flex:1;padding:12px 8px;border-radius:50px;border:none;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;text-align:center;transition:all 0.15s ease;touch-action:manipulation;letter-spacing:0.5px;}
@@ -1623,47 +1941,47 @@
   .cb-manual-btn.sell:active{transform:scale(0.95);}
   /* ══ AUTO TOGGLE ══ */
   .cb-auto-row{display:flex;align-items:center;gap:10px;padding:2px 10px 6px;}
-  .cb-auto-lbl{font-size:10.5px;color:#4B5563;flex:1;font-weight:500;}
-  .cb-toggle{appearance:none;width:40px;height:22px;border-radius:11px;cursor:pointer;background:#E5E7EB;border:none;position:relative;transition:all 0.25s;flex-shrink:0;touch-action:manipulation;}
-  .cb-toggle::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.2);transition:all 0.25s ease;}
+  .cb-auto-lbl{font-size:10.5px;color:#9fb2c0;flex:1;font-weight:500;}
+  .cb-toggle{appearance:none;width:40px;height:22px;border-radius:11px;cursor:pointer;background:#243443;border:none;position:relative;transition:all 0.25s;flex-shrink:0;touch-action:manipulation;}
+  .cb-toggle::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#16222e;box-shadow:0 1px 3px rgba(0,0,0,0.2);transition:all 0.25s ease;}
   .cb-toggle:checked{background:#1E3A2F;}
   .cb-toggle:checked::after{transform:translateX(18px);}
-  .cb-auto-badge{font-size:10px;font-weight:700;color:#9CA3AF;min-width:28px;text-align:center;}
+  .cb-auto-badge{font-size:10px;font-weight:700;color:#7c8d9b;min-width:28px;text-align:center;}
   /* ══ TIMING OFFSET ROW ══ */
   .cb-timing-row{display:flex;align-items:center;gap:6px;padding:4px 10px 8px;}
-  .cb-timing-lbl{font-size:10px;color:#6B7280;flex:1;font-weight:600;}
-  .cb-timing-btn{width:26px;height:26px;border-radius:8px;border:1px solid #E5DDD5;background:#fff;color:#374151;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s;flex-shrink:0;touch-action:manipulation;}
-  .cb-timing-btn:hover{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .cb-timing-val{font-size:11px;font-weight:700;color:#1E3A2F;min-width:64px;text-align:center;font-family:'SF Mono',ui-monospace,monospace;background:#F8F5F0;border:1px solid #E5DDD5;border-radius:8px;padding:3px 6px;}
+  .cb-timing-lbl{font-size:10px;color:#9fb2c0;flex:1;font-weight:600;}
+  .cb-timing-btn{width:26px;height:26px;border-radius:8px;border:1px solid #243443;background:#16222e;color:#dfe7ee;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s;flex-shrink:0;touch-action:manipulation;}
+  .cb-timing-btn:hover{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .cb-timing-val{font-size:11px;font-weight:700;color:#46d98e;min-width:64px;text-align:center;font-family:'SF Mono',ui-monospace,monospace;background:#0c151c;border:1px solid #243443;border-radius:8px;padding:3px 6px;}
   .cb-timing-val.neg{color:#DC2626;}
   /* ══ UTILITY BUTTONS ══ */
-  .cb-reset-btn{display:block;margin:0 10px 8px;padding:8px;border-radius:12px;border:1px solid #E5DDD5;background:#fff;color:#6B7280;font-family:inherit;font-size:9.5px;font-weight:600;cursor:pointer;text-align:center;width:calc(100% - 20px);transition:all 0.15s;}
-  .cb-reset-btn:hover{background:#FEF2F2;border-color:#FCA5A5;color:#DC2626;}
+  .cb-reset-btn{display:block;margin:0 10px 8px;padding:8px;border-radius:12px;border:1px solid #243443;background:#16222e;color:#9fb2c0;font-family:inherit;font-size:9.5px;font-weight:600;cursor:pointer;text-align:center;width:calc(100% - 20px);transition:all 0.15s;}
+  .cb-reset-btn:hover{background:#2a1416;border-color:#FCA5A5;color:#DC2626;}
   /* ══ STATUS BAR ══ */
-  #cbStatus{padding:7px 14px 9px;font-size:7.5px;color:#9CA3AF;font-family:'SF Mono',ui-monospace,monospace;border-top:1px solid #EDE8E2;letter-spacing:0.3px;flex-shrink:0;background:#fff;border-radius:0 0 20px 20px;text-align:center;}
+  #cbStatus{padding:7px 14px 9px;font-size:8px;font-weight:700;font-family:'SF Mono',ui-monospace,monospace;border-top:1px solid #243443;letter-spacing:0.5px;flex-shrink:0;background:#0e1a16;border-radius:0 0 20px 20px;text-align:center;background-image:linear-gradient(90deg,#00d264,#3fe0ff,#9b8cff,#00d264);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:cbGradFlow 7s linear infinite;}
   /* ══ LOG FLOAT PANEL ══ */
-  #cbLogFloat{position:fixed;bottom:148px;left:6px;z-index:2147483646;width:360px;background:#fff;border:1px solid #E5DDD5;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.10);display:none;flex-direction:column;overflow:hidden;touch-action:none;max-height:calc(100svh - 160px);}
+  #cbLogFloat{position:fixed;bottom:148px;left:6px;z-index:2147483646;width:360px;background:#16222e;border:1px solid #243443;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.10);display:none;flex-direction:column;overflow:hidden;touch-action:none;max-height:calc(100svh - 160px);}
   #cbLogFloat.open{display:flex;}
   @media(max-width:480px){#cbLogFloat{width:calc(100vw - 12px);left:6px;}}
-  #cbLogHdr{display:flex;align-items:center;gap:6px;padding:9px 10px 8px;border-bottom:1px solid #EDE8E2;cursor:grab;flex-shrink:0;background:#F8F5F0;border-radius:16px 16px 0 0;}
-  .cb-log-title{font-size:10px;font-weight:800;color:#1E3A2F;text-transform:uppercase;letter-spacing:0.8px;flex:1;}
+  #cbLogHdr{display:flex;align-items:center;gap:6px;padding:9px 10px 8px;border-bottom:1px solid #243443;cursor:grab;flex-shrink:0;background:#0c151c;border-radius:16px 16px 0 0;}
+  .cb-log-title{font-size:10px;font-weight:800;color:#46d98e;text-transform:uppercase;letter-spacing:0.8px;flex:1;}
   .cb-log-hdr-btns{display:flex;gap:4px;flex-shrink:0;}
-  .cb-log-hbtn{height:24px;padding:0 9px;border-radius:20px;background:#fff;border:1px solid #E5DDD5;color:#6B7280;cursor:pointer;font-size:9px;font-family:inherit;font-weight:700;display:flex;align-items:center;gap:3px;white-space:nowrap;transition:all 0.15s;}
-  .cb-log-hbtn:hover{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .cb-log-hbtn.copy-ok{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .cb-log-hbtn.pause-on{background:#FFF7ED;border-color:#FDBA74;color:#EA580C;}
-  .cb-log-filters{display:flex;gap:4px;padding:6px 10px;border-bottom:1px solid #EDE8E2;flex-wrap:wrap;flex-shrink:0;background:#fff;}
-  .cb-log-filter{font-size:8px;padding:2px 9px;border-radius:20px;border:1px solid #E5DDD5;background:transparent;color:#9CA3AF;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.15s;}
-  .cb-log-filter.active{border-color:#1E3A2F;color:#1E3A2F;background:#F0FDF4;}
-  .cb-log-filter.f-signal.active{border-color:#86EFAC;color:#16A34A;background:#F0FDF4;}
-  .cb-log-filter.f-error.active{border-color:#FCA5A5;color:#DC2626;background:#FEF2F2;}
-  .cb-log-filter.f-tve.active{border-color:#FCD34D;color:#D97706;background:#FFFBEB;}
-  .cb-log-filter.f-tick.active{border-color:#BFDBFE;color:#2563EB;background:#EFF6FF;}
-  .cb-log-inner{overflow-y:auto;flex:1;padding-bottom:4px;background:#fff;}
+  .cb-log-hbtn{height:24px;padding:0 9px;border-radius:20px;background:#16222e;border:1px solid #243443;color:#9fb2c0;cursor:pointer;font-size:9px;font-family:inherit;font-weight:700;display:flex;align-items:center;gap:3px;white-space:nowrap;transition:all 0.15s;}
+  .cb-log-hbtn:hover{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .cb-log-hbtn.copy-ok{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .cb-log-hbtn.pause-on{background:#2a1f10;border-color:#FDBA74;color:#EA580C;}
+  .cb-log-filters{display:flex;gap:4px;padding:6px 10px;border-bottom:1px solid #243443;flex-wrap:wrap;flex-shrink:0;background:#16222e;}
+  .cb-log-filter{font-size:8px;padding:2px 9px;border-radius:20px;border:1px solid #243443;background:transparent;color:#7c8d9b;cursor:pointer;font-family:inherit;font-weight:600;transition:all 0.15s;}
+  .cb-log-filter.active{border-color:#46d98e;color:#46d98e;background:#0f2a1c;}
+  .cb-log-filter.f-signal.active{border-color:#86EFAC;color:#16A34A;background:#0f2a1c;}
+  .cb-log-filter.f-error.active{border-color:#FCA5A5;color:#DC2626;background:#2a1416;}
+  .cb-log-filter.f-tve.active{border-color:#FCD34D;color:#D97706;background:#2a2410;}
+  .cb-log-filter.f-tick.active{border-color:#1e3a5f;color:#2563EB;background:#15233a;}
+  .cb-log-inner{overflow-y:auto;flex:1;padding-bottom:4px;background:#16222e;}
   .cb-log-inner::-webkit-scrollbar{width:3px;}
-  .cb-log-inner::-webkit-scrollbar-thumb{background:#D1C8BE;border-radius:2px;}
+  .cb-log-inner::-webkit-scrollbar-thumb{background:#33485a;border-radius:2px;}
   .cb-log-line{font-size:9px;line-height:1.5;display:flex;flex-direction:column;padding:4px 10px;border-bottom:1px solid #F5F0EB;border-right:2px solid transparent;transition:background 0.1s;}
-  .cb-log-line:hover{background:#F8F5F0;}
+  .cb-log-line:hover{background:#0c151c;}
   .cb-log-line.new{animation:logSlide 0.3s ease-out;}
   @keyframes logSlide{from{opacity:0;transform:translateX(-8px);}to{opacity:1;transform:translateX(0);}}
   .cb-log-line.t-signal{border-right-color:#16A34A;}
@@ -1672,62 +1990,62 @@
   .cb-log-line.t-tick{border-right-color:#3B82F6;}
   .cb-log-line.t-asset{border-right-color:#D97706;}
   .cb-log-row1{display:flex;align-items:baseline;gap:5px;}
-  .cb-log-seq{color:#D1C8BE;font-family:'SF Mono',ui-monospace,monospace;font-size:7px;min-width:26px;flex-shrink:0;}
-  .cb-log-t{color:#9CA3AF;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0;font-size:7.5px;}
-  .cb-log-m{color:#374151;font-weight:500;word-break:break-word;white-space:pre-wrap;flex:1;}
+  .cb-log-seq{color:#33485a;font-family:'SF Mono',ui-monospace,monospace;font-size:7px;min-width:26px;flex-shrink:0;}
+  .cb-log-t{color:#7c8d9b;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0;font-size:7.5px;}
+  .cb-log-m{color:#dfe7ee;font-weight:500;word-break:break-word;white-space:pre-wrap;flex:1;}
   .cb-log-m.signal{color:#16A34A;font-weight:700;}
   .cb-log-m.error{color:#DC2626;font-weight:600;}
   .cb-log-m.tve{color:#D97706;font-weight:600;}
   .cb-log-m.tick{color:#3B82F6;}
   .cb-log-m.asset{color:#D97706;font-weight:700;}
-  .cb-log-m.info{color:#6B7280;}
-  .cb-log-extra{font-size:7.5px;color:#9CA3AF;font-family:'SF Mono',ui-monospace,monospace;padding-right:31px;word-break:break-all;margin-top:1px;}
+  .cb-log-m.info{color:#9fb2c0;}
+  .cb-log-extra{font-size:7.5px;color:#7c8d9b;font-family:'SF Mono',ui-monospace,monospace;padding-right:31px;word-break:break-all;margin-top:1px;}
   /* ══ LOG TOGGLE BTN ══ */
-  #cbLogToggle{position:fixed;bottom:100px;left:6px;z-index:2147483646;padding:6px 12px;border-radius:20px;background:#fff;border:1px solid #D1E8DC;color:#1E3A2F;font-family:'IBM Plex Sans Arabic',-apple-system,sans-serif;font-size:9px;font-weight:700;cursor:pointer;touch-action:manipulation;display:none;align-items:center;gap:5px;box-shadow:0 2px 8px rgba(30,58,47,0.10);}
+  #cbLogToggle{position:fixed;bottom:100px;left:6px;z-index:2147483646;padding:6px 12px;border-radius:20px;background:#16222e;border:1px solid #243443;color:#46d98e;font-family:'IBM Plex Sans Arabic',-apple-system,sans-serif;font-size:9px;font-weight:700;cursor:pointer;touch-action:manipulation;display:none;align-items:center;gap:5px;box-shadow:0 2px 8px rgba(30,58,47,0.10);}
   #cbLogToggle.visible{display:flex;}
-  #cbLogCount{background:#F0FDF4;color:#16A34A;border-radius:10px;padding:1px 6px;font-size:7.5px;min-width:16px;text-align:center;border:1px solid #86EFAC;}
+  #cbLogCount{background:#0f2a1c;color:#16A34A;border-radius:10px;padding:1px 6px;font-size:7.5px;min-width:16px;text-align:center;border:1px solid #86EFAC;}
   /* ══ SPY PANEL ══ */
-  #cbSpyPanel{position:fixed;bottom:80px;right:8px;width:340px;max-width:calc(100vw - 16px);max-height:calc(100svh - 100px);background:#fff;border:1.5px solid #E5DDD5;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.10);display:none;flex-direction:column;overflow:hidden;z-index:2147483645;touch-action:none;direction:ltr;}
+  #cbSpyPanel{position:fixed;bottom:80px;right:8px;width:340px;max-width:calc(100vw - 16px);max-height:calc(100svh - 100px);background:#16222e;border:1.5px solid #243443;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.10);display:none;flex-direction:column;overflow:hidden;z-index:2147483645;touch-action:none;direction:ltr;}
   #cbSpyPanel.open{display:flex;}
   @media(max-width:480px){#cbSpyPanel{width:calc(100vw - 16px);right:8px;}}
-  #cbSpyHdr{display:flex;align-items:center;gap:7px;padding:10px 12px 9px;border-bottom:1px solid #EDE8E2;cursor:grab;background:#F8F5F0;flex-shrink:0;border-radius:16px 16px 0 0;}
+  #cbSpyHdr{display:flex;align-items:center;gap:7px;padding:10px 12px 9px;border-bottom:1px solid #243443;cursor:grab;background:#0c151c;flex-shrink:0;border-radius:16px 16px 0 0;}
   #cbSpyHdr:active{cursor:grabbing;}
-  .spy-title{font-size:10px;font-weight:800;color:#1E3A2F;letter-spacing:0.6px;flex:1;}
-  .spy-badge{font-size:8px;font-weight:700;padding:2px 8px;border-radius:10px;background:#F0FDF4;border:1px solid #86EFAC;color:#16A34A;}
-  .spy-badge.ai{background:#F0FDF4;border-color:#4ADE80;color:#15803D;}
+  .spy-title{font-size:10px;font-weight:800;color:#46d98e;letter-spacing:0.6px;flex:1;}
+  .spy-badge{font-size:8px;font-weight:700;padding:2px 8px;border-radius:10px;background:#0f2a1c;border:1px solid #86EFAC;color:#16A34A;}
+  .spy-badge.ai{background:#0f2a1c;border-color:#4ADE80;color:#46d98e;}
   .spy-hdr-btns{display:flex;gap:4px;flex-shrink:0;}
-  .spy-btn{padding:3px 9px;border-radius:20px;border:1px solid #E5DDD5;background:#fff;color:#6B7280;font-size:8.5px;font-weight:700;cursor:pointer;font-family:inherit;transition:all 0.15s;}
-  .spy-btn:hover{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  .spy-btn.copy-ok{background:#F0FDF4;border-color:#86EFAC;color:#16A34A;}
-  #cbSpyFilters{display:flex;gap:4px;padding:7px 10px 5px;flex-shrink:0;border-bottom:1px solid #EDE8E2;overflow-x:auto;background:#fff;}
-  .spy-filter{padding:2px 11px;border-radius:20px;border:1px solid #E5DDD5;background:transparent;color:#9CA3AF;font-size:8px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;transition:all 0.15s;}
-  .spy-filter.active{background:#F0FDF4;border-color:#1E3A2F;color:#1E3A2F;}
+  .spy-btn{padding:3px 9px;border-radius:20px;border:1px solid #243443;background:#16222e;color:#9fb2c0;font-size:8.5px;font-weight:700;cursor:pointer;font-family:inherit;transition:all 0.15s;}
+  .spy-btn:hover{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  .spy-btn.copy-ok{background:#0f2a1c;border-color:#86EFAC;color:#16A34A;}
+  #cbSpyFilters{display:flex;gap:4px;padding:7px 10px 5px;flex-shrink:0;border-bottom:1px solid #243443;overflow-x:auto;background:#16222e;}
+  .spy-filter{padding:2px 11px;border-radius:20px;border:1px solid #243443;background:transparent;color:#7c8d9b;font-size:8px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;transition:all 0.15s;}
+  .spy-filter.active{background:#0f2a1c;border-color:#46d98e;color:#46d98e;}
   #cbSpyScroll{overflow-y:auto;flex:1;padding:6px 0;}
   #cbSpyScroll::-webkit-scrollbar{width:3px;}
-  #cbSpyScroll::-webkit-scrollbar-thumb{background:#D1C8BE;border-radius:3px;}
+  #cbSpyScroll::-webkit-scrollbar-thumb{background:#33485a;border-radius:3px;}
   .spy-entry{padding:6px 10px;border-bottom:1px solid #F5F0EB;font-family:'SF Mono',ui-monospace,monospace;}
-  .spy-entry.ai-signal{background:#F0FDF4;border-right:3px solid #16A34A;}
-  .spy-entry.uid-low{background:#FFFBEB;border-right:3px solid #D97706;}
+  .spy-entry.ai-signal{background:#0f2a1c;border-right:3px solid #16A34A;}
+  .spy-entry.uid-low{background:#2a2410;border-right:3px solid #D97706;}
   .spy-entry-hdr{display:flex;align-items:center;gap:5px;margin-bottom:3px;}
-  .spy-ev-name{font-size:9px;font-weight:700;color:#1E3A2F;}
-  .spy-ev-name.ai{color:#15803D;}
-  .spy-ev-ts{font-size:7.5px;color:#9CA3AF;}
-  .spy-ev-src{font-size:7px;padding:1px 5px;border-radius:5px;border:1px solid #E5DDD5;color:#6B7280;}
-  .spy-ev-uid{font-size:8px;font-weight:800;padding:1px 6px;border-radius:6px;background:#FFFBEB;border:1px solid #FCD34D;color:#D97706;}
-  .spy-ev-body{font-size:7.5px;color:#374151;white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;line-height:1.4;}
+  .spy-ev-name{font-size:9px;font-weight:700;color:#46d98e;}
+  .spy-ev-name.ai{color:#46d98e;}
+  .spy-ev-ts{font-size:7.5px;color:#7c8d9b;}
+  .spy-ev-src{font-size:7px;padding:1px 5px;border-radius:5px;border:1px solid #243443;color:#9fb2c0;}
+  .spy-ev-uid{font-size:8px;font-weight:800;padding:1px 6px;border-radius:6px;background:#2a2410;border:1px solid #FCD34D;color:#D97706;}
+  .spy-ev-body{font-size:7.5px;color:#dfe7ee;white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;line-height:1.4;}
   .spy-ev-body::-webkit-scrollbar{width:2px;}
-  .spy-ev-body::-webkit-scrollbar-thumb{background:#D1C8BE;}
-  .spy-ev-copy{font-size:7px;color:#9CA3AF;cursor:pointer;margin-top:2px;display:inline-block;}
-  .spy-ev-copy:hover{color:#1E3A2F;}
-  #cbSpyStats{padding:6px 10px;border-top:1px solid #EDE8E2;font-size:8px;color:#6B7280;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0;background:#F8F5F0;}
+  .spy-ev-body::-webkit-scrollbar-thumb{background:#33485a;}
+  .spy-ev-copy{font-size:7px;color:#7c8d9b;cursor:pointer;margin-top:2px;display:inline-block;}
+  .spy-ev-copy:hover{color:#46d98e;}
+  #cbSpyStats{padding:6px 10px;border-top:1px solid #243443;font-size:8px;color:#9fb2c0;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0;background:#0c151c;}
   /* ══ SPY BTN ══ */
-  #cbSpyBtn{position:fixed;bottom:100px;right:8px;z-index:2147483646;padding:6px 12px;border-radius:20px;background:#fff;border:1px solid #D1E8DC;color:#1E3A2F;font-family:'IBM Plex Sans Arabic',-apple-system,sans-serif;font-size:9px;font-weight:700;cursor:pointer;touch-action:manipulation;display:none;align-items:center;gap:5px;box-shadow:0 2px 8px rgba(30,58,47,0.10);}
+  #cbSpyBtn{position:fixed;bottom:100px;right:8px;z-index:2147483646;padding:6px 12px;border-radius:20px;background:#16222e;border:1px solid #243443;color:#46d98e;font-family:'IBM Plex Sans Arabic',-apple-system,sans-serif;font-size:9px;font-weight:700;cursor:pointer;touch-action:manipulation;display:none;align-items:center;gap:5px;box-shadow:0 2px 8px rgba(30,58,47,0.10);}
   #cbSpyBtn.visible{display:flex;}
-  #cbSpyCount{background:#F0FDF4;color:#16A34A;border-radius:10px;padding:1px 6px;font-size:7.5px;min-width:16px;text-align:center;border:1px solid #86EFAC;}
+  #cbSpyCount{background:#0f2a1c;color:#16A34A;border-radius:10px;padding:1px 6px;font-size:7.5px;min-width:16px;text-align:center;border:1px solid #86EFAC;}
   /* ══ ANALYSIS PANEL ══ */
   #cbAnalBtn{position:fixed;bottom:132px;right:8px;z-index:2147483646;padding:6px 12px;border-radius:20px;background:#1E3A2F;border:1px solid #2d5c45;color:#fff;font-family:'IBM Plex Sans Arabic',-apple-system,sans-serif;font-size:9px;font-weight:700;cursor:pointer;touch-action:manipulation;display:flex;align-items:center;gap:5px;box-shadow:0 2px 8px rgba(30,58,47,0.25);}
   #cbAnalCount{background:rgba(255,255,255,0.2);color:#fff;border-radius:10px;padding:1px 6px;font-size:7.5px;min-width:16px;text-align:center;}
-  #cbAnalPanel{position:fixed;bottom:80px;right:8px;width:380px;max-width:calc(100vw - 16px);max-height:calc(100svh - 100px);background:#fff;border:1.5px solid #D1E8DC;border-radius:16px;box-shadow:0 8px 32px rgba(30,58,47,0.15);display:none;flex-direction:column;overflow:hidden;z-index:2147483645;touch-action:none;direction:rtl;}
+  #cbAnalPanel{position:fixed;bottom:80px;right:8px;width:380px;max-width:calc(100vw - 16px);max-height:calc(100svh - 100px);background:#16222e;border:1.5px solid #243443;border-radius:16px;box-shadow:0 8px 32px rgba(30,58,47,0.15);display:none;flex-direction:column;overflow:hidden;z-index:2147483645;touch-action:none;direction:rtl;}
   #cbAnalPanel.open{display:flex;}
   @media(max-width:480px){#cbAnalPanel{width:calc(100vw - 16px);right:8px;}}
   #cbAnalHdr{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#1E3A2F;gap:6px;flex-shrink:0;}
@@ -1736,21 +2054,21 @@
   .cb-anal-hbtn{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);color:#fff;border-radius:6px;padding:3px 7px;font-size:8px;cursor:pointer;white-space:nowrap;font-family:inherit;}
   .cb-anal-hbtn:hover{background:rgba(255,255,255,0.28);}
   .cb-anal-hbtn.ok{background:#16A34A;border-color:#16A34A;}
-  #cbAnalSummary{padding:8px 10px;background:#F0FDF4;border-bottom:1px solid #D1FAE5;font-size:9px;color:#065F46;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0;line-height:1.6;}
-  .cb-anal-tabs{display:flex;gap:0;border-bottom:1px solid #E5DDD5;flex-shrink:0;background:#F8F5F0;}
-  .cb-anal-tab{flex:1;padding:6px 4px;font-size:9px;font-weight:600;border:none;background:transparent;color:#6B7280;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;}
-  .cb-anal-tab.active{color:#1E3A2F;border-bottom-color:#1E3A2F;background:#fff;}
+  #cbAnalSummary{padding:8px 10px;background:#0f2a1c;border-bottom:1px solid #D1FAE5;font-size:9px;color:#065F46;font-family:'SF Mono',ui-monospace,monospace;flex-shrink:0;line-height:1.6;}
+  .cb-anal-tabs{display:flex;gap:0;border-bottom:1px solid #243443;flex-shrink:0;background:#0c151c;}
+  .cb-anal-tab{flex:1;padding:6px 4px;font-size:9px;font-weight:600;border:none;background:transparent;color:#9fb2c0;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;}
+  .cb-anal-tab.active{color:#46d98e;border-bottom-color:#46d98e;background:#16222e;}
   #cbAnalBody{flex:1;overflow-y:auto;font-size:8px;font-family:'SF Mono',ui-monospace,monospace;}
   .cb-anal-table{width:100%;border-collapse:collapse;}
-  .cb-anal-table th{position:sticky;top:0;background:#F8F5F0;color:#374151;font-size:7.5px;font-weight:700;padding:4px 5px;border-bottom:1px solid #E5DDD5;text-align:center;white-space:nowrap;}
-  .cb-anal-table td{padding:4px 5px;border-bottom:1px solid #F3EEE8;color:#374151;text-align:center;white-space:nowrap;cursor:pointer;}
-  .cb-anal-table tr:hover td{background:#F0FDF4;}
-  .cb-anal-table tr.win td{background:#F0FDF4;}
-  .cb-anal-table tr.loss td{background:#FFF1F2;}
+  .cb-anal-table th{position:sticky;top:0;background:#0c151c;color:#dfe7ee;font-size:7.5px;font-weight:700;padding:4px 5px;border-bottom:1px solid #243443;text-align:center;white-space:nowrap;}
+  .cb-anal-table td{padding:4px 5px;border-bottom:1px solid #F3EEE8;color:#dfe7ee;text-align:center;white-space:nowrap;cursor:pointer;}
+  .cb-anal-table tr:hover td{background:#0f2a1c;}
+  .cb-anal-table tr.win td{background:#0f2a1c;}
+  .cb-anal-table tr.loss td{background:#2a1416;}
   .cb-anal-table td.up{color:#16A34A;font-weight:700;}
   .cb-anal-table td.dn{color:#DC2626;font-weight:700;}
   .cb-anal-table td.adj{color:#D97706;font-weight:700;}
-  .cb-anal-empty{padding:20px;text-align:center;color:#9CA3AF;font-size:9px;}
+  .cb-anal-empty{padding:20px;text-align:center;color:#7c8d9b;font-size:9px;}
   `;
 
   const HUD_HTML = `
@@ -1762,7 +2080,7 @@
   <div id="cbPanel">
     <div class="cb-hdr" id="cbDragHdr">
       <div class="cb-hdr-dot" id="cbHdrDot"></div>
-      <span class="cb-ttl" id="cbMainTitle">⚡ V12.5 SUPREME</span>
+      <span class="cb-ttl" id="cbMainTitle">⚡ QUANTUM PRO ⚡</span>
       <div class="cb-hdr-actions">
         <button class="cb-icon-btn" id="cbMinimize">−</button>
         <button class="cb-icon-btn" id="cbClose">✕</button>
@@ -1777,6 +2095,10 @@
         <div class="cb-stat"><span class="cb-stat-lbl">العد التنازلي</span><span class="cb-stat-val y" id="cbCd">–</span></div>
         <div class="cb-stat"><span class="cb-stat-lbl">الرصيد</span><span class="cb-stat-val g" id="cbBalance">–</span></div>
         <div class="cb-stat"><span class="cb-stat-lbl">تيكات</span><span class="cb-stat-val" id="cbTickCount">0</span></div>
+      </div>
+
+      <div class="cb-marquee" id="cbMarquee" title="أكثر الأزواج حركة (OTC) + نسبة العائد">
+        <div class="cb-marquee-track" id="cbMarqueeTrack">🔎 جاري رصد الفرص…</div>
       </div>
 
       <div class="cb-ind-row">
@@ -1843,17 +2165,13 @@
       <div class="cb-conf-bar">
         <span class="cb-conf-lbl">🎯 توافق</span>
         <span class="cb-conf-score" id="cbConfScore">–</span>
-        <div class="cb-conf-track"><div class="cb-conf-fill" id="cbConfFill" style="width:0%;background:#E5DDD5;"></div></div>
+        <div class="cb-conf-track"><div class="cb-conf-fill" id="cbConfFill" style="width:0%;background:#243443;"></div></div>
         <span class="cb-ind-badge" id="cbDblBadge" style="font-size:9px;color:#D97706;opacity:0.5;">DBL–</span>
       </div>
       <div class="cb-conf-detail" id="cbConfDetail">–</div>
 
       <div class="cb-pause-bar" id="cbPauseBar">
         <span class="cb-pause-txt" id="cbPauseTxt">⛔ وقف مؤقت بسبب الخسائر</span>
-      </div>
-
-      <div class="cb-vol-bar" id="cbVolBar">
-        <span id="cbVolState">NORMAL</span>
       </div>
 
       <div class="cb-bad-sess" id="cbBadSession">
@@ -1867,8 +2185,7 @@
         <div class="cb-stt"><span class="cb-stt-lbl">🔥🔥 مزدوج</span><span class="cb-stt-val y" id="cbDoubles">0</span></div>
       </div>
       <div class="cb-stats-bar" style="padding-top:4px;">
-        <div class="cb-stt" style="flex:2;"><span class="cb-stt-lbl">نقطة التعادل (Breakeven)</span><span class="cb-stt-val y" id="cbBreakeven">–</span></div>
-        <div class="cb-stt" style="flex:1;"><span class="cb-stt-lbl">التقلب</span><span class="cb-stt-val y" id="cbVolMini">–</span></div>
+        <div class="cb-stt" style="flex:1;"><span class="cb-stt-lbl">نقطة التعادل (Breakeven)</span><span class="cb-stt-val y" id="cbBreakeven">–</span></div>
       </div>
 
       <div class="cb-sig-wrap">
@@ -1905,7 +2222,7 @@
         <span class="cb-auto-badge" id="cbAutoBadge">OFF</span>
       </div>
       <div class="cb-conf-slider-row" style="display:flex;align-items:center;gap:6px;padding:4px 10px;">
-        <span style="font-size:10px;color:#9CA3AF;min-width:58px;">🎯 ثقة ≥</span>
+        <span style="font-size:10px;color:#7c8d9b;min-width:58px;">🎯 ثقة ≥</span>
         <input type="range" id="cbConfSlider" min="50" max="95" value="75" style="flex:1;accent-color:#00d264;height:4px;">
         <span style="font-size:11px;font-weight:700;color:#00d264;min-width:28px;text-align:right;" id="cbConfSliderVal">75%</span>
       </div>
@@ -1917,16 +2234,11 @@
       </div>
       <div style="display:flex;gap:6px;margin:0 10px 8px;">
         <button class="cb-reset-btn" id="cbResetStats" style="margin:0;flex:1;">إعادة تعيين</button>
-        <button class="cb-reset-btn" id="cbCopyStats"  style="margin:0;flex:1;border-color:#BFDBFE;color:#2563EB;">📋 نسخ</button>
+        <button class="cb-reset-btn" id="cbCopyStats"  style="margin:0;flex:1;border-color:#1e3a5f;color:#2563EB;">📋 نسخ</button>
       </div>
-      <div style="margin:0 10px 4px;font-size:9px;color:#9CA3AF;text-align:right;" id="cbDbStats">🗄 جاري تحميل إحصاءات قاعدة البيانات…</div>
-      <div style="display:flex;gap:6px;margin:0 10px 8px;align-items:center;">
-        <input type="password" id="cbGhToken" placeholder="ghp_... GitHub Token" style="flex:1;background:#fff;border:1px solid #E5DDD5;border-radius:8px;color:#374151;font-size:10px;padding:5px 8px;outline:none;">
-        <button class="cb-reset-btn" id="cbGhSync" style="margin:0;flex:0 0 auto;border-color:#86EFAC;color:#16A34A;">☁️ مزامنة</button>
-      </div>
-      <div style="margin:0 10px 6px;font-size:9px;color:#16A34A;text-align:right;" id="cbGhStatus">☁️ لم يتم المزامنة بعد</div>
+      <div style="margin:0 10px 8px;font-size:9px;color:#7c8d9b;text-align:right;" id="cbDbStats">🗄 جاري تحميل إحصاءات قاعدة البيانات…</div>
     </div>
-    <div id="cbStatus">v13.0 | OBI+LAD+LSTM+RL | IMDB: 70%→×2 | 85%→×3 | 94%→×4</div>
+    <div id="cbStatus">◆ QUANTUM ENGINE ◆ ORACLE • ETE • LAB ◆ 70%→×2 · 85%→×3 · 94%→×4 ◆</div>
   </div>
   <div id="cbLogFloat">
     <div id="cbLogHdr">
@@ -1972,9 +2284,8 @@
     <div id="cbSpyStats">إدخالات: 0 | AI: 0 | WR-10s: – | WR-30s: –</div>
   </div>
 
-  <!-- ═══ HYBRID ANALYSIS PANEL ═══ -->
-  <button id="cbAnalBtn" onclick="window._cbToggleAnal&&window._cbToggleAnal()">📊 تحليل <span id="cbAnalCount">0</span></button>
-  <div id="cbAnalPanel">
+  <!-- ═══ HYBRID ANALYSIS PANEL (زر مخفي — احتفظنا باللوحة دون الزر) ═══ -->
+  <div id="cbAnalPanel" style="display:none;">
     <div id="cbAnalHdr">
       <span class="cb-anal-title">📊 تحليل ETC — سجل الصفقات التفصيلي</span>
       <div class="cb-anal-hdr-btns">
@@ -2392,6 +2703,41 @@
     if (ico) ico.classList.toggle('on', effectiveConnected);
   }
 
+  // [V25] شريط الفرص المتحرك — أكثر الأزواج حركة (OTC) + نسبة العائد
+  function _renderMarquee() {
+    try {
+      const trackEl = W.document.getElementById('cbMarqueeTrack');
+      if (!trackEl) return;
+      let ops = [];
+      try { ops = (DualWSSManager.getOpportunities && DualWSSManager.getOpportunities()) || []; } catch(_) {}
+      const rows = [];
+      for (const o of ops) {
+        const open = _assetIsOpen.has(o.asset) ? _assetIsOpen.get(o.asset) : true;
+        if (!open) continue;
+        rows.push({
+          asset: o.asset, strength: o.strength || 0, dir: o.dir,
+          isOtc: /_otc$/i.test(o.asset),
+          payout: _assetPayouts.has(o.asset) ? Math.round(_assetPayouts.get(o.asset) * 100) : null,
+        });
+      }
+      // ترتيب: OTC أولاً، ثم الأقوى حركة، ثم الأعلى عائداً
+      rows.sort((a, b) => (b.isOtc - a.isOtc) || (b.strength - a.strength) || ((b.payout||0) - (a.payout||0)));
+      const top = rows.slice(0, 14);
+      if (!top.length) { trackEl.textContent = '🔎 جاري رصد الفرص…'; return; }
+      const html = top.map(r => {
+        const name = r.asset.replace(/_otc$/i, '').replace('_', '/');
+        const tag = r.isOtc ? '<span class="cb-marq-otc">' + name + ' OTC</span>' : name;
+        const hot = r.strength >= 4 ? '🔥' : (r.strength >= 3 ? '⚡' : '•');
+        const arrow = r.dir === 'BUY' ? '<span class="cb-marq-up">▲</span>'
+                    : r.dir === 'SELL' ? '<span class="cb-marq-dn">▼</span>' : '';
+        const pay = r.payout != null ? '<span class="cb-marq-pay">' + r.payout + '%</span>' : '';
+        return '<span class="cb-marq-item">' + hot + ' ' + tag + ' ' + arrow +
+               ' <span class="cb-marq-hot">قوة' + r.strength + '</span> <span class="cb-marq-sep">·</span> ' + pay + '</span>';
+      }).join('<span class="cb-marq-sep">|</span>');
+      trackEl.innerHTML = html;
+    } catch(_) {}
+  }
+
   function updateHUD() {
     const aEl=W.document.getElementById('cbAsset'), pEl=W.document.getElementById('cbPeriod');
     const tdEl=W.document.getElementById('cbTradeDur');
@@ -2634,6 +2980,7 @@
     const changed = !Number.isFinite(tradeAmount) || Math.abs((tradeAmount || 0) - safe) > 1e-9;
     tradeAmount = safe;
     _manualAmountOverride = true;
+    try { W.localStorage.setItem('cb_amount', String(safe)); } catch(_) {}  // [V22] حفظ المبلغ — يتذكّره بعد التحديث
     _rebuildPayloadCache();
     _updateKellyDisplay();
     if (changed) addLog('💵 مبلغ يدوي: $' + tradeAmount.toFixed(2), 'info');
@@ -2729,6 +3076,7 @@
     const badge  = W.document.getElementById('cbAutoBadge');
     const reset  = W.document.getElementById('cbResetStats');
     const amtInp = W.document.getElementById('cbAmountInp');
+    if (amtInp) amtInp.value = tradeAmount;   // [V22] أظهر آخر مبلغ محفوظ
     const manBuy = W.document.getElementById('cbManualBuy');
     const manSel = W.document.getElementById('cbManualSell');
     const dragHdr= W.document.getElementById('cbDragHdr');
@@ -2744,7 +3092,7 @@
       if (_isIslamicAccount) badges.push('🕌');
       if (_aiTradingMode)    badges.push('🤖');
       if (_platformId === 9) badges.push('📱');
-      titleEl.textContent = '⚡ V13 QUANTUM' + (badges.length ? ' ' + badges.join('') : '');
+      titleEl.textContent = '⚡ QUANTUM PRO ⚡' + (badges.length ? ' ' + badges.join('') : '');
     }
 
     // ✅ v10.4 FIX#5: بعد 3 ثوانٍ اجعل المقبس جاهزاً حتى لو لم يأتِ successauth
@@ -2855,6 +3203,9 @@
     // Refresh DB stats every 30s
     _dbUpdateStats();
     _v11_setInterval(_dbUpdateStats, 30000);
+    // [V25] حدّث شريط الفرص المتحرك كل 3 ثواني
+    _renderMarquee();
+    _v11_setInterval(_renderMarquee, 3000);
     // Periodic GitHub auto-sync
     _v11_setInterval(() => _githubSync(false), CFG.GH_SYNC_INTERVAL_MS);
     // Prune old records at startup
@@ -3889,6 +4240,7 @@
     let _running        = false;  // هل النظام يعمل؟
     let _signalQueue    = null;   // طابور الإشارات (إشارة واحدة فقط في كل مرة)
     let _queueTimer     = null;   // مؤقت معالجة الطابور
+    let _entryTimer     = null;   // [V17] مؤقت محرّك توقيت الدخول (ETE)
     let _signalCount    = 0;      // عدد الإشارات المكتشفة
     let _tradeCount     = 0;      // عدد الصفقات المنفذة عبر النظام
     let _ghostCount     = 0;      // عدد الصفقات الوهمية
@@ -3900,6 +4252,7 @@
     let _lastExecutedPatternTs = 0; // وقت آخر تنفيذ نمط
     let _tradeWindowCount = 0;   // عدد الصفقات في النافذة الزمنية
     let _tradeWindowStart = 0;   // بداية نافذة العد
+    const _oracleTicks  = {};    // ✅ [V13.5/C] تيكات الأوراكل لكل زوج: { asset: [{p,t}, ...] }
 
     // ─── تهيئة النظام ──────────────────────────────────────────────────
     function init() {
@@ -3951,47 +4304,176 @@
       }
     }
 
+    // ✅ [V13.5/المسار C] تسجيل تيك أوراكل (الفيد الأسرع) في مخزن مستقل
+    function recordOracleTick(asset, price) {
+      const a = normalizeAsset(asset);
+      const buf = _oracleTicks[a] || (_oracleTicks[a] = []);
+      const now = Date.now();
+      buf.push({ p: price, t: now });
+      // قصّ النافذة الزمنية + سقف طول
+      const cutoff = now - Math.max(CFG.ORACLE_CONFIRM_WINDOW_MS, 4000);
+      while (buf.length && buf[0].t < cutoff) buf.shift();
+      if (buf.length > 60) buf.shift();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // ✅ [V14 — إصلاح الأوراكل] الأوراكل الحقيقي = إشارات المنصة (لا events-po)
+    //   اكتشاف SPY: events-po خادم إشعارات بلا أسعار. المصدر الصحيح:
+    //   • signals/update (رقمي، قوة 0-4 لكل زوج×فريم) — على المقبس الرئيسي
+    //   • إشارة غرفة الشات (UP2/DOWN2 = اتجاه صريح) — على chat-po
+    // ══════════════════════════════════════════════════════════════════════
+    const _platSig = {};   // asset -> { tf:{[sec]:code}, ts }  (قوة من signals/update)
+    const _chatSig = {};   // asset -> { dir:'BUY'|'SELL', tf, price, ts }  (اتجاه من الشات)
+
+    // signals/update | signals/load: [[asset,[[tf,code],...],price], ...]
+    function onSignalsUpdate(signals) {
+      if (!Array.isArray(signals)) return;
+      const now = Date.now();
+      for (const row of signals) {
+        if (!Array.isArray(row) || typeof row[0] !== 'string') continue;
+        const a = normalizeAsset(row[0]);
+        const pairs = Array.isArray(row[1]) ? row[1] : [];
+        const rec = _platSig[a] || (_platSig[a] = { tf: {}, ts: now });
+        rec.ts = now;
+        for (const p of pairs) { if (Array.isArray(p) && p.length >= 2) rec.tf[p[0]] = p[1]; }
+      }
+      try { _tryGenerate(activeAsset); } catch(_) {}   // [V16] قوة المنصة قد تُولّد صفقة
+    }
+    // [V25] فرص الأزواج للشريط المتحرك — قوة (0-4) + اتجاه الشات لكل زوج طازج
+    function getOpportunities() {
+      const out = [], now = Date.now();
+      for (const a in _platSig) {
+        const rec = _platSig[a];
+        if (!rec || (now - rec.ts) > 90000) continue;     // طازج خلال 90ث فقط
+        const cs = _chatSig[a];
+        out.push({
+          asset: a,
+          strength: platformStrength(a),
+          dir: (cs && (now - cs.ts) < 180000) ? cs.dir : null,
+        });
+      }
+      return out;
+    }
+    // إشارة الشات: forecast UP2/DOWN2, timeframe "M1".. → اتجاه صريح
+    function onChatSignal(sig) {
+      try {
+        if (!sig || !sig.symbol || !sig.forecast) return;
+        const a = normalizeAsset(sig.symbol);
+        const dir = /UP/i.test(sig.forecast) ? 'BUY' : (/DOWN/i.test(sig.forecast) ? 'SELL' : null);
+        if (!dir) return;
+        _chatSig[a] = { dir, tf: sig.timeframe || '?', price: sig.price || 0, ts: Date.now() };
+        _tryGenerate(a);   // [V16] محاولة توليد صفقة (شات + منصة + ميل)
+      } catch(_) {}
+    }
+    // ─── [V16] محرّك إشارات المنصة (PSE) — مولّد من 3 مصادر ──────────────────
+    //   اتجاه: الشات (إن وُجد) أو ميل التيك (أجزاء الأجزاء) | قوة: signals/update
+    function _tryGenerate(asset) {
+      if (!CFG.PSE_ENABLED || !_running) return;
+      const a = normalizeAsset(asset);
+      if (a !== normalizeAsset(activeAsset)) return;   // الزوج النشط فقط
+      if (_signalQueue || tradeExec) return;           // عند الخمول فقط
+      const cs = _chatSig[a];
+      const freshChat = cs && (Date.now() - cs.ts) < CFG.ORACLE_SIG_TTL_MS;
+      const st = platformStrength(a);
+      let dir = null, basis = null;
+      if (freshChat) { dir = cs.dir; basis = 'chat'; }            // ① اتجاه الشات الرسمي
+      else if (CFG.PSE_USE_SLOPE) {                                // ② ميل التيك اللحظي
+        const sl = OracleLab.microSlope(a, CFG.PSE_SLOPE_MS);
+        if (sl && Math.abs(sl.rel) >= CFG.PSE_SLOPE_MIN_REL) { dir = sl.rel > 0 ? 'BUY' : 'SELL'; basis = 'slope'; }
+      }
+      if (!dir) return;
+      // بوابة القوة: الشات يكفي وحده؛ غير ذلك يلزم قوة منصة كافية
+      if (basis !== 'chat' && !(CFG.PSE_USE_PLAT && st >= CFG.ORACLE_MIN_STRENGTH)) return;
+      const conf = Math.min(95, CFG.PSE_CONF + (st >= 4 ? 4 : st >= 3 ? 2 : 0));
+      addLog('🛰️ [PSE] مولّد: ' + dir + ' | ' + a + ' | أساس:' + basis + ' | قوة المنصة:' + st + ' | ثقة:' + conf, 'signal');
+      _enqueueSignal({
+        direction: dir, asset: a,
+        price: (_lastTradePrice || 0),
+        confidence: conf,
+        pattern: 'platform_' + basis,
+        timestamp: Date.now(),
+      });
+    }
+    // أقصى قوة منصة على فريمات السكالب (≤ مدة الصفقة)
+    function platformStrength(asset) {
+      const rec = _platSig[normalizeAsset(asset)];
+      if (!rec || (Date.now() - rec.ts) > CFG.ORACLE_SIG_TTL_MS) return 0;
+      const dur = _tradeDuration || candlePeriod || 5;
+      let best = 0;
+      for (const k in rec.tf) { if (Number(k) <= Math.max(dur, 5) + 0.5) best = Math.max(best, rec.tf[k] || 0); }
+      return best; // 0-4
+    }
+
+    // ✅ [V14] الأوراكل الجديد — يجمع: اتجاه الشات (veto) + قوة المنصة (تأكيد)
+    function oracleAgrees(direction, asset) {
+      if (!CFG.ORACLE_CONFIRM_ENABLED) return { agree: true, reason: 'disabled' };
+      const a = normalizeAsset(asset);
+      const now = Date.now();
+
+      // (1) إشارة الشات الاتجاهية الصريحة — أقوى مصدر
+      const cs = _chatSig[a];
+      // ✅ [FIX-G] حجب المعاكس بنافذة أطول (M15 يبقى صالحاً) — الشات كان SELL والبوت يشتري ويخسر
+      if (cs && CFG.FIXG_CHAT_VETO_ENABLED && cs.dir !== direction && (now - cs.ts) <= (CFG.FIXG_CHAT_VETO_TTL_MS || 900000)) {
+        return { agree: false, reason: 'chat-contradict', oracleDir: cs.dir };
+      }
+      if (cs && (now - cs.ts) <= CFG.ORACLE_CHAT_TTL_MS) {
+        if (cs.dir !== direction) return { agree: false, reason: 'chat-contradict', oracleDir: cs.dir };
+        return { agree: true, reason: 'chat-confirm', oracleDir: cs.dir };
+      }
+
+      // (2) قوة المنصة الرقمية على فريم السكالب (اتجاه مجهول → لا تحجب، لكن سجّل القوة)
+      const st = platformStrength(a);
+      if (st >= CFG.ORACLE_MIN_STRENGTH) return { agree: true, reason: 'plat-strength', strength: st };
+
+      // (3) احتياط: ميل الأوراكل القديم إن توفّر (نادراً)
+      const all = _oracleTicks[a] || [];
+      const win = all.filter(x => x.t >= now - CFG.ORACLE_CONFIRM_WINDOW_MS);
+      if (win.length >= CFG.ORACLE_CONFIRM_MIN_TICKS) {
+        const slope = win[win.length - 1].p - win[0].p;
+        let noise = 0, k = 0;
+        for (let i = 1; i < win.length; i++) { noise += Math.abs(win[i].p - win[i-1].p); k++; }
+        noise = (k ? noise / k : 0) || 1e-9;
+        if (Math.abs(slope) >= CFG.ORACLE_CONFIRM_K * noise) {
+          const oracleDir = slope > 0 ? 'BUY' : 'SELL';
+          return { agree: oracleDir === direction, reason: oracleDir === direction ? 'confirm' : 'contradict', oracleDir };
+        }
+      }
+      return { agree: true, reason: 'no-oracle' }; // fail-open
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     // فلتر الاتجاه (Trend Filter) — منع التداول عكس الاتجاه العام
     // محسّن: 7 شموع + مقارنة EMA قصيرة/طويلة + قوة الاتجاه
     // ══════════════════════════════════════════════════════════════════════
+    // ✅ [V13.4] كشف اتجاه مُطبّع بالتقلب (ATR) — يحل العطل الرياضي القديم
+    //   المشكلة السابقة: نافذة 7 شموع + عتبة نسبية 0.0002 (≈370 نقطة/7ث) = NEUTRAL دائماً
+    //   على أزواج OTC البطيئة → الفلتر مفتوح والصفقات المعاكسة تمر. الحل: نافذة أطول +
+    //   ميل مُقاس بوحدات ATR (scale-invariant) + استثناء آخر شمعة كي لا يُفسد نمط الانعكاس القراءة.
     function _detectTrend(candles) {
-      if (!candles || candles.length < 3) return 'NEUTRAL';
-      const n = Math.min(candles.length, 7);
-      const recent = candles.slice(-n);
+      const W = CFG.TREND_WINDOW_CANDLES;
+      if (!candles || candles.length < Math.min(12, W)) return 'NEUTRAL';
+      const n = Math.min(candles.length, W);
+      // استثناء آخر شمعة (هي شمعة النمط/الانعكاس) حتى لا تُحرّف الاتجاه
+      const win = candles.slice(-n, -1);
+      if (win.length < 6) return 'NEUTRAL';
 
-      // 1. حساب EMA بسيط: متوسط آخر 3 شموع مقابل أول 3 شموع
-      const shortLen = Math.min(3, Math.floor(n / 2));
-      const recentPrices = recent.slice(-shortLen).map(c => c.close);
-      const olderPrices = recent.slice(0, shortLen).map(c => c.close);
-      const avgRecent = recentPrices.reduce((s, p) => s + p, 0) / recentPrices.length;
-      const avgOlder = olderPrices.reduce((s, p) => s + p, 0) / olderPrices.length;
-      const diff = avgOlder > 0 ? (avgRecent - avgOlder) / avgOlder : 0;
+      const closes = win.map(c => c.close);
+      const half = Math.floor(closes.length / 2);
+      const avgOlder = closes.slice(0, half).reduce((s, p) => s + p, 0) / half;
+      const avgNewer = closes.slice(-half).reduce((s, p) => s + p, 0) / half;
+      const slope = avgNewer - avgOlder;                       // فرق مطلق بالسعر
 
-      // 2. قوة الاتجاه: نسبة الشموع في نفس الاتجاه
-      const bullishCount = recent.filter(c => c.isBullish).length;
-      const bearishCount = recent.filter(c => !c.isBullish).length;
-      const bullRatio = bullishCount / n;
-      const bearRatio = bearishCount / n;
+      // ATR ≈ متوسط مدى الشمعة (تطبيع يجعل العتبة صالحة لأي زوج/فريم)
+      let atr = 0;
+      for (const c of win) atr += (c.high - c.low);
+      atr = (atr / win.length) || 1e-9;
+      const z = slope / atr;                                    // كم ATR تحرّك المتوسط
 
-      // 3. حجم الشموع: متوسط جسم الشموع الصاعدة مقابل الهابطة
-      let bullBodySum = 0, bearBodySum = 0;
-      for (const c of recent) {
-        const body = Math.abs(c.close - c.open);
-        if (c.isBullish) bullBodySum += body; else bearBodySum += body;
-      }
-      const bullBodyAvg = bullishCount > 0 ? bullBodySum / bullishCount : 0;
-      const bearBodyAvg = bearishCount > 0 ? bearBodySum / bearishCount : 0;
-      const bodyDominance = (bullBodyAvg + bearBodyAvg) > 0
-        ? (bullBodyAvg - bearBodyAvg) / (bullBodyAvg + bearBodyAvg)
-        : 0;
-
-      // 4. قرار مُركّب: EMA + اتجاه الشموع + حجم الأجسام
-      const score = diff * 10000 + (bullRatio - bearRatio) * 2 + bodyDominance;
-
-      // عتبات صارمة: تحتاج إشارات متعددة متفقة
-      if (score > 1.0 && bullRatio >= 0.55 && diff > 0.0002) return 'UP';
-      if (score < -1.0 && bearRatio >= 0.55 && diff < -0.0002) return 'DOWN';
+      // تأكيد ثانوي: غلبة اتجاه الشموع (مرونة — لا نشترط 55% صارمة)
+      const bullRatio = win.filter(c => c.isBullish).length / win.length;
+      const thr = CFG.TREND_ATR_Z_THRESHOLD;
+      if (z >  thr && bullRatio >= 0.45) return 'UP';
+      if (z < -thr && bullRatio <= 0.55) return 'DOWN';
       return 'NEUTRAL';
     }
 
@@ -4002,6 +4484,29 @@
       if (signalDir === 'BUY' && trend === 'UP') return true;   // شراء مع صعود ✓
       if (signalDir === 'SELL' && trend === 'DOWN') return true; // بيع مع هبوط ✓
       return false;  // عكس الاتجاه → ممنوع
+    }
+
+    // ✅ [V13.4] بوابة الثقة التكيفية — تتعلم من النتائج الحية لكل نمط
+    //   bump: زيادة عتبة الثقة المطلوبة (تتناسب مع صافي خسائر النمط)
+    //   disabled: تعطيل النمط مؤقتاً إذا نزل معدل فوزه الحي تحت العتبة بعد عينات كافية
+    function _adaptiveConfGate(pattern) {
+      if (!CFG.ADAPTIVE_CONF_ENABLED || !pattern) return { bump: 0, disabled: false };
+      const s = _patternWL[pattern];
+      if (!s) return { bump: 0, disabled: false };
+      const total = s.w + s.l;
+      if (total < CFG.ADAPTIVE_MIN_SAMPLES) return { bump: 0, disabled: false };
+      const wr = s.w / total;
+      const disabled = wr < CFG.ADAPTIVE_DISABLE_WR;
+      const netLoss = Math.max(0, s.l - s.w);                 // كم خسارة صافية للنمط
+      const bump = Math.min(20, netLoss * CFG.ADAPTIVE_CONF_PER_LOSS); // سقف +20%
+      return { bump, disabled };
+    }
+
+    // ✅ [V13.4] تسجيل نتيجة نمط (يُستدعى من recordTrade)
+    function _recordPatternResult(pattern, win) {
+      if (!pattern) return;
+      const s = _patternWL[pattern] || (_patternWL[pattern] = { w: 0, l: 0 });
+      if (win) s.w++; else s.l++;
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -4026,9 +4531,9 @@
 
     // ─── التهدئة التكيفية — حسب مدة الشمعة ────────────────────────────
     function getAdaptiveCooldown() {
-      const periodMs = (candlePeriod > 0 ? candlePeriod : 15) * 1000;
-      const cd = Math.max(CFG.TRADE_COOLDOWN_FLOOR_MS, Math.round(periodMs * CFG.TRADE_COOLDOWN_RATIO));
-      // إضافة تباين عشوائي بسيط ±20%
+      // ✅ [V14.5] التهدئة تتبع مدة الصفقة (سكالبينغ) لا مدة الشمعة الطويلة → أسرع بكثير
+      const durMs = (_snapTradeDuration(_tradeDuration || candlePeriod || 3)) * 1000;
+      const cd = Math.max(CFG.TRADE_COOLDOWN_FLOOR_MS, Math.round(durMs * CFG.TRADE_COOLDOWN_RATIO));
       const variance = cd * 0.2 * (Math.random() - 0.5) * 2;
       return Math.round(cd + variance);
     }
@@ -4041,22 +4546,17 @@
     // المستوحاة من BACKUP_bot.js: يقارن سعر الدخول مع السعر الحالي بعد انتهاء المدة
     function _isGhostTradeActive() {
       if (!CFG.GHOST_TRADE_ENABLED) return false;
-      // ✅ حد أقصى للصفقات الوهمية المتتالية — بعد 2 صفقة وهمية ننفذ حقيقية
-      if (_ghostConsecutive >= 2) {
+      // ✅ [V13.6] حد أقصى للصفقات الوهمية المتتالية (قابل للضبط — أقل = أسرع)
+      if (_ghostConsecutive >= CFG.GHOST_MAX_CONSECUTIVE) {
         _ghostTradeActive = false;
         _ghostConsecutive = 0;
-        addLog('👻 [GHOST] تم الوصول للحد الأقصى (2) — العودة للتداول الحقيقي', 'signal');
+        addLog('👻 [GHOST] اكتمل التحقق — العودة للتداول الحقيقي', 'signal');
         return false;
       }
-      // بعد خسارة واحدة → الصفقة التالية تكون وهمية
-      if (STATS.lossStreak === 1 && !_ghostWatching) {
+      // ✅ [V13.6] فعّل Ghost فقط بعد عتبة خسائر متتالية (2 بدل 1 — لا نُبطئ بعد خسارة مفردة)
+      if (STATS.lossStreak >= CFG.GHOST_TRIGGER_STREAK && !_ghostWatching) {
         _ghostTradeActive = true;
-        addLog('👻 [GHOST] تفعيل الصفقة الوهمية — خسارة واحدة', 'info');
-      }
-      // بعد خسارتين → صفقة وهمية ثانية
-      if (STATS.lossStreak === 2 && !_ghostWatching) {
-        _ghostTradeActive = true;
-        addLog('👻 [GHOST] تفعيل الصفقة الوهمية — خسارتين متتاليتين', 'info');
+        addLog('👻 [GHOST] تفعيل صفقة وهمية — ' + STATS.lossStreak + ' خسائر متتالية', 'info');
       }
       return _ghostTradeActive;
     }
@@ -4066,7 +4566,7 @@
       _ghostConsecutive++;  // ✅ زيادة عداد الصفقات الوهمية المتتالية
       _ghostWatching = true;
       const entryPrice = _lastSignal ? _lastSignal.price : 0;
-      const tradeSec = _tradeDuration || snapToPOTime(candlePeriod || 5);
+      const tradeSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 3));
       addLog('👻 [GHOST-EXEC] محاكاة ' + direction + ' | ' + asset + ' @ ' + (entryPrice ? entryPrice.toFixed(5) : '?') + ' | $' + amount + ' | بدون رهان حقيقي', 'signal');
       // مقارنة سعر حقيقي بعد انتهاء مدة الصفقة — مثل النسخة الاحتياطية
       const expireMs = Math.max(tradeSec * 1000, 5000);
@@ -4124,13 +4624,24 @@
       // شرط الخروج المبكر: اتجاه واضح (3 شموع متتالية في نفس الاتجاه)
       const a = normalizeAsset(activeAsset);
       const candles = candleBuffers[a];
-      if (candles && candles.length >= CFG.RECALIBRATE_MIN_TREND_CANDLES) {
-        const last = candles.slice(-CFG.RECALIBRATE_MIN_TREND_CANDLES);
+      // ✅ [FIX-H] استئناف أصعب: شموع أكثر + عدم معارضة الشات (يمنع الاستئناف عند قمة ارتداد)
+      const _resumeN = Math.max(CFG.RECALIBRATE_MIN_TREND_CANDLES, CFG.FIXH_RESUME_CANDLES || 5);
+      if (candles && candles.length >= _resumeN) {
+        const last = candles.slice(-_resumeN);
         const allBull = last.every(c => c.isBullish);
         const allBear = last.every(c => !c.isBullish);
         if (allBull || allBear) {
+          const _resumeDir = allBull ? 'BUY' : 'SELL';
+          // [FIX-H] إذا الشات يعارض الاتجاه — لا تستأنف (السوق خداع)
+          if (CFG.FIXH_RESUME_NEEDS_ORACLE) {
+            const _orcR = oracleAgrees(_resumeDir, activeAsset);
+            if (!_orcR.agree) {
+              addLog('🔄 [RECALIBRATE] اتجاه ' + _resumeDir + ' لكن الشات يعارض (' + _orcR.oracleDir + ') — لا استئناف', 'info');
+              return true;
+            }
+          }
           _recalibrating = false;
-          addLog('🔄 [RECALIBRATE] ✅ اتجاه واضح (' + (allBull ? 'صعودي' : 'هبوطي') + ') — استئناف التداول', 'signal');
+          addLog('🔄 [RECALIBRATE] ✅ اتجاه واضح (' + (allBull ? 'صعودي' : 'هبوطي') + ' ×' + _resumeN + ') — استئناف التداول', 'signal');
           return false;
         }
       }
@@ -4143,12 +4654,74 @@
       return true;
     }
 
+    // ─── [V18] تقييم سريع داخل الشمعة — لا ينتظر إغلاقها (لتسريع التداول) ────
+    //   يبني الشمعة المتشكّلة من تيكات اللحظة ويُلحقها مؤقتاً بالشموع المغلقة، ثم
+    //   يستدعي onCandleClose نفسه → يعيد استخدام كل بوابات الأمان (أوراكل/اتجاه/
+    //   ثقة/استنفاد/ETE) دون تكرارها. القفل والتهدئة يمنعان التكرار في نفس الشمعة.
+    let _lastFastEval = 0;
+    let _inFastEval = false;   // [V24] صحيح أثناء تقييم شمعة غير مكتملة (للبوابة الذكية)
+    const _patternOffLog = {}; // [V25] خنق تكرار سجل PATTERN-OFF لكل نمط
+    function fastEval(asset) {
+      if (!CFG.FAST_EVAL_ENABLED || !_running) return;
+      const a = normalizeAsset(asset);
+      if (a !== activeAsset) return;
+      if (tradeExec || _signalQueue || _entryTimer) return;      // مشغول/ينتظر دخولاً
+      if (Date.now() < _cooldownUntil) return;
+      const now = Date.now();
+      if (now - _lastFastEval < CFG.FAST_EVAL_MS) return;
+      const cc = currentCandles[a];
+      if (!cc || !cc.prices || cc.prices.length < CFG.FAST_EVAL_MIN_TICKS) return;
+      const buf = candleBuffers[a];
+      if (!buf || buf.length < 3) return;
+      const forming = buildCandle(cc.prices, cc.startTime);
+      if (!forming) return;
+      _lastFastEval = now;
+      buf.push(forming);                       // ألحق الشمعة المتشكّلة مؤقتاً
+      _inFastEval = true;                       // [V24] وضع التقييم داخل الشمعة (للبوابة الذكية)
+      try { onCandleClose(a); } catch(_) {} finally { buf.pop(); _inFastEval = false; }
+    }
+
+    // ═══ [V24] محرك نبض التيكات (TickPulse) — رصد اندفاعات الزخم بالملي‑ثانية ═══
+    //   يعمل على كل تيك (مُهدّأ): يقيس الميل اللحظي على نوافذ ms متعدّدة، وإذا اكتشف
+    //   اندفاعاً قوياً متّسقاً (نافذتان أقصر توافقان) يولّد إشارة زخم تمرّ بكل بوابات
+    //   الأمان عبر _processSignal (أوراكل/اتجاه/أرضية/تتابع). فرص أوسع + أسرع.
+    let _lastPulseCheck = 0;
+    let _pulseCooldownUntil = 0;
+    function tickPulse(asset) {
+      if (!CFG.TICKPULSE_ENABLED || !_running || !autoTrade) return;
+      const a = normalizeAsset(asset);
+      if (a !== activeAsset) return;
+      if (tradeExec || _signalQueue || _entryTimer) return;       // مشغول
+      const now = Date.now();
+      if (now < _cooldownUntil || now < _pulseCooldownUntil) return;
+      if (now - _lastPulseCheck < CFG.TICKPULSE_MS) return;
+      _lastPulseCheck = now;
+      const buf = candleBuffers[a];
+      if (!buf || buf.length < 3) return;                          // نحتاج اتجاهاً
+      const s = OracleLab.microSlope(a, CFG.TICKPULSE_WIN_MS);
+      if (!s || s.ticks < CFG.TICKPULSE_MIN_TICKS || Math.abs(s.rel) < CFG.TICKPULSE_MIN_REL) return;
+      const dir = s.rel > 0 ? 'BUY' : 'SELL';
+      // اتّساق: نافذتان أقصر توافقان الاتجاه (الزخم يبني لا يرتد لحظياً)
+      const s2 = OracleLab.microSlope(a, Math.round(CFG.TICKPULSE_WIN_MS / 2));
+      const sShort = OracleLab.microSlope(a, 300);
+      const consistent = s2 && sShort &&
+        ((dir === 'BUY'  && s2.rel >= 0 && sShort.rel >= 0) ||
+         (dir === 'SELL' && s2.rel <= 0 && sShort.rel <= 0));
+      if (!consistent) return;
+      const strength = Math.abs(s.rel) / CFG.TICKPULSE_MIN_REL;    // ≥1
+      const conf = Math.max(CFG.TICKPULSE_BASE_CONF, Math.min(90, Math.round(CFG.TICKPULSE_BASE_CONF + (strength - 1) * 8)));
+      const tb = tickBuffers[a];
+      const price = (tb && tb.length) ? tb[tb.length - 1] : 0;
+      addLog('⚡ [TICKPULSE] اندفاع ' + dir + ' | ميل ' + (s.rel * 1e6).toFixed(1) + 'e-6 (' + s.ticks + ' تيك/' + CFG.TICKPULSE_WIN_MS + 'ms) | ثقة ' + conf + '%', 'signal');
+      _pulseCooldownUntil = now + CFG.TICKPULSE_COOLDOWN_MS;
+      _processSignal({ direction: dir, asset: a, price, confidence: conf, pattern: 'tick_pulse', timestamp: now });
+    }
+
     // ─── كشف إشارة عند إغلاق شمعة ─────────────────────────────────────
     function onCandleClose(asset) {
       if (!_running) return;
       const a = normalizeAsset(asset);
       if (a !== activeAsset) return;
-
       const candles = candleBuffers[a];
       if (!candles || candles.length < 3) return;
 
@@ -4156,40 +4729,115 @@
       _lastTrendDirection = _detectTrend(candles);
       _updateTrendHUD();
 
-      // ═══ فحص استنفاد الاتجاه — منع الدخول بعد رالي طويل ═══
+      // ═══ فحص استنفاد الاتجاه ═══
+      // ✅ [V14.2] لم يعد يحجب كل شيء (كان يبطئ ~دقيقتين). يسجّل اتجاه الاستنفاد فقط،
+      //   ثم بوابة EXHAUST-COOL أدناه تمنع اتجاه الاستمرار فقط وتسمح بالانعكاس → أسرع.
       if (_isTrendExhausted(candles)) {
-        addLog('🛑 [EXHAUSTION] اتجاه مستنفد — السعر تحرك ' + _priceRunPips.toFixed(1) + ' نقطة في اتجاه واحد. انتظار انعكاس أو تصحيح', 'info');
-        return;
+        const _wExh = candles.slice(-Math.min(candles.length, 12));
+        const _exhUp = _wExh[_wExh.length - 1].close >= _wExh[0].close;
+        _exhaustDir   = _exhUp ? 'UP' : 'DOWN';
+        _exhaustUntil = Date.now() + CFG.EXHAUSTION_COOLDOWN_MS;
+        if (Date.now() - _lastExhaustLogTs > CFG.EXHAUSTION_COOLDOWN_MS) {
+          _lastExhaustLogTs = Date.now();
+          addLog('🛑 [EXHAUSTION] استنفاد ' + _exhaustDir + ' — تحرّك ' + _priceRunPips.toFixed(1) + ' نقطة. منع الاستمرار فقط (الانعكاس مسموح)', 'info');
+        }
+        // لا return — نكمل لتقييم النمط؛ بوابة الاستنفاد الاتجاهي تتكفّل بالباقي
       }
 
       // ═══ فحص تكرار النمط — منع نفس النمط من التكرار بسرعة ═══
-      const signal = _evaluateCandlePattern(candles.slice(-5));
-      if (signal) {
-        if (_isPatternFatigued(signal)) {
-          addLog('🔄 [PATTERN-FATIGUE] نمط ' + signal.pattern + ' مكرر — حاجز إعادة التسليح نشط', 'info');
-          return;
-        }
+      // ✅ [V13.4] مرّر تاريخاً كافياً لتفعيل فحص القمة/القاع (كان slice(-5) يُعطّله)
+      const signal = _evaluateCandlePattern(candles.slice(-(CFG.THREE_CANDLE_PEAK_WINDOW + 5)));
+      if (signal) _processSignal(signal, { fromFastEval: _inFastEval });
+    }
 
-        // فلتر ثقة أدنى — يتحكم به سلايدر الواجهة
-        if (signal.confidence < _minConfThreshold) {
-          addLog('🔮 [SIGNAL-DISCARD] ' + signal.direction + ' | ثقة منخفضة: ' + signal.confidence + '% < ' + _minConfThreshold + '% | نمط: ' + signal.pattern, 'info');
+    // ═══ [V24] معالجة موحّدة للإشارة عبر كل بوابات الأمان ═══
+    //   تُستخدم من أنماط الشموع ومن محرك نبض التيكات — مصدر واحد للحقيقة.
+    function _processSignal(signal, opts) {
+      opts = opts || {};
+      // [V24] داخل الشمعة: لا تدخل إلا الإشارة القوية — الضعيفة تنتظر إغلاق الشمعة (أمان)
+      if (opts.fromFastEval && (signal.confidence || 0) < CFG.FAST_EVAL_MIN_CONF) return;
+
+      if (_isPatternFatigued(signal)) {
+        addLog('🔄 [PATTERN-FATIGUE] نمط ' + signal.pattern + ' مكرر — حاجز إعادة التسليح نشط', 'info');
+        return;
+      }
+
+      // ✅ [V13.4] بوابة الاستنفاد الاتجاهي — امنع اتجاه الاستمرار فقط بعد رالي مستنفد
+      if (Date.now() < _exhaustUntil) {
+        const contDir = _exhaustDir === 'UP' ? 'BUY' : (_exhaustDir === 'DOWN' ? 'SELL' : null);
+        if (contDir && signal.direction === contDir) {
+          addLog('🛑 [EXHAUST-COOL] ' + signal.direction + ' ممنوع — استمرار بعد استنفاد ' + _exhaustDir, 'info');
           return;
         }
-        // فلتر الاتجاه — منع التداول عكس الاتجاه
-        if (!_trendAllows(signal.direction)) {
+      }
+
+      // ✅ [V13.4] ثقة تكيفية — ارفع عتبة القبول للأنماط الخاسرة حياً، وعطّل الضعيف جداً
+      const _adapt = _adaptiveConfGate(signal.pattern);
+      const _effThreshold = Math.max(_minConfThreshold + _adapt.bump, CFG.ABSOLUTE_MIN_CONF);  // [V24] أرضية صارمة 60%
+      if (_adapt.disabled) {
+        const _k = signal.pattern, _nowOff = Date.now();   // [V25] خنق التكرار: مرة كل 15ث للنمط
+        if (!_patternOffLog[_k] || _nowOff - _patternOffLog[_k] > 15000) {
+          _patternOffLog[_k] = _nowOff;
+          addLog('🚫 [PATTERN-OFF] ' + signal.pattern + ' معطّل مؤقتاً — معدل فوز حي منخفض', 'info');
+        }
+        return;
+      }
+
+      // ✅ [V13.6] فلتر الاتجاه — 'hard'=حظر | 'soft'=خصم ثقة
+      let _effConf = signal.confidence;
+      let _counterTrend = false;
+      if (!_trendAllows(signal.direction)) {
+        if (CFG.TREND_FILTER_MODE === 'hard') {
           addLog('🚫 [TREND-BLOCK] ' + signal.direction + ' ممنوع — الاتجاه: ' + _lastTrendDirection, 'info');
           return;
         }
-
-        // ═══ فحص الصفقات المتتالية في نفس الاتجاه ═══
-        if (signal.direction === _lastTradeDirection && _consecutiveSameDir >= CFG.MAX_CONSEC_SAME_DIR) {
-          addLog('🚫 [CONSEC-LIMIT] ' + signal.direction + ' ممنوع — ' + _consecutiveSameDir + ' صفقات متتالية في نفس الاتجاه (حد: ' + CFG.MAX_CONSEC_SAME_DIR + ')', 'info');
-          return;
-        }
-
-        _signalCount++;
-        _enqueueSignal(signal);
+        _counterTrend = true;
+        _effConf -= CFG.TREND_SOFT_PENALTY;
+        addLog('⚠️ [TREND-SOFT] ' + signal.direction + ' عكس الاتجاه ' + _lastTrendDirection + ' — خصم ' + CFG.TREND_SOFT_PENALTY + '% (ثقة: ' + _effConf + '%)', 'info');
       }
+
+      // فلتر ثقة أدنى
+      if (_effConf < _effThreshold) {
+        addLog('🔮 [SIGNAL-DISCARD] ' + signal.direction + ' | ثقة: ' + _effConf + '% < ' + _effThreshold + '% | نمط: ' + signal.pattern, 'info');
+        return;
+      }
+
+      // ✅ [V14] فلتر تأكيد الأوراكل
+      const _orc = oracleAgrees(signal.direction, signal.asset);
+      if (!_orc.agree) {
+        addLog('🔮 [ORACLE-VETO] ' + signal.direction + ' مرفوض — إشارة المنصة ' + _orc.oracleDir + ' (' + _orc.reason + ')', 'info');
+        return;
+      }
+      const _oracleConfirmed = (_orc.reason === 'chat-confirm' || _orc.reason === 'plat-strength');
+      if (_oracleConfirmed) {
+        addLog('🔮 [ORACLE-OK] ' + signal.direction + ' مؤكَّد — ' + _orc.reason + (_orc.strength ? ' قوة:' + _orc.strength : '') + ' | قوة المنصة الآن: ' + (DualWSSManager.platformStrength ? DualWSSManager.platformStrength(signal.asset) : '?'), 'info');
+      }
+
+      // ═══ [DISCIPLINE] انضباط 17/5: المحرّكات الزائدة (نبض التيك/الاستمرار) تتطلّب
+      //   تأكيد أوراكل صريحاً — لا تتداول على زخم وحده (مصدر خسائر V2). أنماط الشموع
+      //   المؤكَّدة تبقى كما هي (نواة 17/5 الرابحة).
+      if (CFG.DISCIPLINE_ORACLE_FOR_ENGINES !== false &&
+          (signal.pattern === 'tick_pulse' || signal.pattern === 'momentum_continuation') &&
+          !_oracleConfirmed) {
+        addLog('🧭 [DISCIPLINE] ' + signal.pattern + ' مرفوض — يتطلّب تأكيد أوراكل صريح (انضباط 17/5)', 'info');
+        return;
+      }
+
+      // ✅ [V14.6] المعاكس للاتجاه + بلا تأكيد منصة = ملف الخسارة
+      if (CFG.COUNTERTREND_NEEDS_ORACLE && _counterTrend && !_oracleConfirmed &&
+          signal.confidence < CFG.COUNTERTREND_MIN_CONF) {
+        addLog('🛡️ [CT-GUARD] ' + signal.direction + ' مرفوض — معاكس للاتجاه بلا تأكيد منصة وثقة ' + signal.confidence + '% < ' + CFG.COUNTERTREND_MIN_CONF + '%', 'info');
+        return;
+      }
+
+      // ═══ فحص الصفقات المتتالية في نفس الاتجاه ═══
+      if (signal.direction === _lastTradeDirection && _consecutiveSameDir >= CFG.MAX_CONSEC_SAME_DIR) {
+        addLog('🚫 [CONSEC-LIMIT] ' + signal.direction + ' ممنوع — ' + _consecutiveSameDir + ' صفقات متتالية في نفس الاتجاه (حد: ' + CFG.MAX_CONSEC_SAME_DIR + ')', 'info');
+        return;
+      }
+
+      _signalCount++;
+      _enqueueSignal(signal);
     }
 
     // ─── معالجة إشارة signals من المنصة ─────────────────────────────────
@@ -4322,7 +4970,7 @@
       if (allBullish && avgBody > 0) {
         // ═══ فحص موقع السعر — رفض الشراء عند القمة ═══
         if (candles.length >= 10) {
-          const recentPrices = candles.slice(-10).map(c => c.close);
+          const recentPrices = candles.slice(-CFG.THREE_CANDLE_PEAK_WINDOW).map(c => c.close);
           const recentMin = Math.min(...recentPrices);
           const recentMax = Math.max(...recentPrices);
           const recentRange = recentMax - recentMin;
@@ -4362,7 +5010,7 @@
       if (allBearish && avgBody > 0) {
         // ═══ فحص موقع السعر — رفض البيع عند القاع ═══
         if (candles.length >= 10) {
-          const recentPrices = candles.slice(-10).map(c => c.close);
+          const recentPrices = candles.slice(-CFG.THREE_CANDLE_PEAK_WINDOW).map(c => c.close);
           const recentMin = Math.min(...recentPrices);
           const recentMax = Math.max(...recentPrices);
           const recentRange = recentMax - recentMin;
@@ -4405,7 +5053,17 @@
         const prevBody = Math.abs(prev.close - prev.open);
         const currBody = Math.abs(curr.close - curr.open);
 
+        // ✅ [V14.5] موقع السعر في المدى الأخير — لرفض شراء القمة/بيع القاع (سبب خسائر الابتلاع)
+        let _posIR = 0.5;
+        if (candles.length >= 10) {
+          const _rp = candles.slice(-CFG.THREE_CANDLE_PEAK_WINDOW).map(c => c.close);
+          const _mn = Math.min(..._rp), _mx = Math.max(..._rp), _rg = _mx - _mn;
+          if (_rg > 0) _posIR = (curr.close - _mn) / _rg;
+        }
+
         if (!prev.isBullish && curr.isBullish && currBody > prevBody * 1.2) {
+          // ✅ [V14.5] لا تشترِ ابتلاعاً صعودياً عند قمة المدى
+          if (_posIR > CFG.THREE_CANDLE_PEAK_REJECT) return null;
           const trendBonus = _lastTrendDirection === 'UP' ? CFG.ENGULFING_TREND_BONUS : (_lastTrendDirection === 'DOWN' ? -15 : 0);
           // مكافأة حجم الابتلاع — إذا كان جسم الشمعة > 2× السابقة
           const sizeBonus = currBody > prevBody * 2 ? CFG.ENGULFING_SIZE_BONUS : 0;
@@ -4421,6 +5079,8 @@
         }
 
         if (prev.isBullish && !curr.isBullish && currBody > prevBody * 1.2) {
+          // ✅ [V14.5] لا تبِع ابتلاعاً هبوطياً عند قاع المدى
+          if (_posIR < (1 - CFG.THREE_CANDLE_PEAK_REJECT)) return null;
           const trendBonus = _lastTrendDirection === 'DOWN' ? CFG.ENGULFING_TREND_BONUS : (_lastTrendDirection === 'UP' ? -15 : 0);
           const sizeBonus = currBody > prevBody * 2 ? CFG.ENGULFING_SIZE_BONUS : 0;
           const conf = Math.max(55, Math.min(95, CFG.ENGULFING_BASE_CONF + trendBonus + sizeBonus));
@@ -4468,6 +5128,29 @@
               timestamp: Date.now(),
             };
           }
+        }
+      }
+
+      // نمط 4: [V24-CONT] استمرار مع الاتجاه — دخول مع الزخم (لا انعكاس فقط)
+      //   بوابة الاستنفاد (EXHAUST-COOL) تمنعه تلقائياً عند القمم/القيعان المستنفدة.
+      if (CFG.CONTINUATION_ENABLED && candles.length >= 3 && _lastTrendDirection !== 'NEUTRAL') {
+        const c1 = candles[candles.length-1], c0 = candles[candles.length-2];
+        const body = Math.abs(c1.close - c1.open), range = c1.high - c1.low;
+        const avgBody = (Math.abs(c1.close - c1.open) + Math.abs(c0.close - c0.open)) / 2;
+        const wantBuy  = _lastTrendDirection === 'UP'   && c1.isBullish  && c1.close > c0.close;
+        const wantSell = _lastTrendDirection === 'DOWN' && !c1.isBullish && c1.close < c0.close;
+        if ((wantBuy || wantSell) && range > 0 && body >= range * 0.4 && body >= avgBody * 0.8) {
+          let aligned = 0;
+          for (let k = 1; k <= 3 && candles.length - k >= 0; k++) {
+            const c = candles[candles.length - k];
+            if ((_lastTrendDirection === 'UP' && c.isBullish) || (_lastTrendDirection === 'DOWN' && !c.isBullish)) aligned++;
+          }
+          const conf = Math.max(CFG.CONTINUATION_MIN_CONF, Math.min(85, 60 + aligned * 7));
+          return {
+            direction: wantBuy ? 'BUY' : 'SELL',
+            asset: activeAsset, price: c1.close,
+            confidence: conf, pattern: 'momentum_continuation', timestamp: Date.now(),
+          };
         }
       }
 
@@ -4557,6 +5240,53 @@
 
       // ═══ تنفيذ حقيقي ═══
 
+      // ═══ [V26] الدخول الذكي — حارس «شراء القمة / بيع القاع» ═══
+      //   يعالج شكوى «التحليل صحيح والتوقيت خطأ»: الدخول عند ذروة موجة ضعيفة يرتد خلال 3ث.
+      //   يرفض فقط عند التقاطع الثلاثي: اندفاع غير قوي + سعر عند الطرف غير المواتي + سرعة تخبو.
+      //   الاندفاع القوي (استمرار) والثقة العالية (≥88%) يتجاوزان الحارس فوراً — لا إبطاء.
+      if (CFG.SMART_ENTRY_ENABLED && (signal.confidence || 0) < CFG.SMART_ENTRY_BYPASS_CONF) {
+        const _A    = normalizeAsset(signal.asset);
+        const _sLong = OracleLab.microSlope(_A, CFG.TICKPULSE_WIN_MS);
+        const _strong = _sLong && Math.abs(_sLong.rel) >= CFG.SMART_ENTRY_STRONG_REL;
+        if (!_strong) {
+          const _rp = OracleLab.microRangePos(_A, CFG.SMART_ENTRY_RANGE_MS);
+          const _sShort = OracleLab.microSlope(_A, CFG.SMART_ENTRY_SHORT_MS);
+          const _atExtreme = _rp && (_rp.ticks || 0) >= CFG.SMART_ENTRY_MIN_TICKS && (
+              (signal.direction === 'BUY'  && _rp.pos >= CFG.SMART_ENTRY_BUY_MAX_POS) ||
+              (signal.direction === 'SELL' && _rp.pos <= CFG.SMART_ENTRY_SELL_MIN_POS));
+          let _fading = false;
+          if (_sLong && _sShort && _sLong.dt > 0 && _sShort.dt > 0) {
+            const _vLong  = Math.abs(_sLong.rel)  / _sLong.dt;
+            const _vShort = Math.abs(_sShort.rel) / _sShort.dt;
+            _fading = _vShort < (CFG.SMART_ENTRY_FADE_FRAC * _vLong);
+          }
+          if (_atExtreme && _fading) {
+            addLog('🎯 [SMART-ENTRY] ' + signal.direction + ' مرفوض — السعر عند ' +
+              (signal.direction === 'BUY' ? 'قمة' : 'قاع') + ' المدى اللحظي (' + Math.round(_rp.pos * 100) +
+              '%) واندفاع يخبو — تجنّب التوقيت السيّئ', 'info');
+            return;
+          }
+        }
+      }
+
+      // ✅ [FIX-E] حارس جراحي: ارفض تقاطع (معاكس للاتجاه + ثقة حدّية + زخم آني رقيق n1/n2)
+      //   هذا التقاطع بالضبط هو ملف الخسائر الأربع في السجل. الإشارات القوية لا تتأثر.
+      if (CFG.FIXE_ENABLED) {
+        const _ctE = !_trendAllows(signal.direction) && _lastTrendDirection !== 'NEUTRAL';
+        const _slE = OracleLab.microSlope(normalizeAsset(signal.asset), CFG.FIXE_THIN_SLOPE_MS);
+        const _thinE = !_slE || (_slE.ticks || 0) <= CFG.FIXE_THIN_TICKS;
+        // (أ) معاكس للاتجاه بثقة دون العتبة → رفض (يحجب T9)
+        if (_ctE && (signal.confidence || 0) < CFG.FIXE_CT_MIN_CONF) {
+          addLog('🛡️ [FIX-E] رفض — ' + signal.direction + ' معاكس للاتجاه ' + _lastTrendDirection + ' بثقة ' + signal.confidence + '% < ' + CFG.FIXE_CT_MIN_CONF + '%', 'info');
+          return;
+        }
+        // (ب) ثقة حدّية + زخم آني رقيق (n1/n2) → رفض (يحجب T6 71% و T8 72%)
+        if (_thinE && (signal.confidence || 0) < CFG.FIXE_THIN_MIN_CONF) {
+          addLog('🛡️ [FIX-E] رفض — زخم آني رقيق (n' + (_slE ? (_slE.ticks||0) : 0) + ') + ثقة ' + signal.confidence + '% < ' + CFG.FIXE_THIN_MIN_CONF + '%', 'info');
+          return;
+        }
+      }
+
       // فحص النافذة الزمنية — أقصى عدد صفقات خلال فترة محددة
       const _now = Date.now();
       if (_now - _tradeWindowStart > CFG.TRADE_WINDOW_MS) {
@@ -4583,26 +5313,101 @@
       _lastExecutedPattern = signal.pattern + ':' + signal.asset;
       _lastExecutedPatternTs = _now;
 
-      // حساب التأخير الاصطناعي
+      // [V24-2X] صفقتان حقيقيتان عند الثقة العالية (أمران فعليان — أصدق من مضاعفة المبلغ التجميلية)
+      const _execAmount = tradeAmount;
+      let _tradeCount = 1;
+      // ✅ [FIX-F] لا تضاعف بعد خسائر متتالية — خسارة ×2 تضاعف النزيف
+      const _allowDoubleF = (STATS.lossStreak || 0) < (CFG.FIXF_NO_DOUBLE_AFTER_LOSSES || 2);
+      if (!_allowDoubleF && CFG.TWO_TRADES_ENABLED && (signal.confidence || 0) >= CFG.TWO_TRADES_MIN_CONF) {
+        addLog('🛡️ [FIX-F] لا مضاعفة — ' + STATS.lossStreak + ' خسائر متتالية → صفقة واحدة فقط', 'info');
+      }
+      if (_allowDoubleF && CFG.TWO_TRADES_ENABLED && (signal.confidence || 0) >= CFG.TWO_TRADES_MIN_CONF) {
+        _tradeCount = 2;
+        _lastTradeWasDouble = true;
+        STATS.doubles = (STATS.doubles || 0) + 1;
+        addLog('🔥 [2X] إشارة قوية ' + signal.confidence + '% → صفقتان × $' + _execAmount, 'signal');
+      }
+
+      // [V24-FAST] التأخير الاصطناعي أُلغي — تبقى إزاحة التوقيت اليدوية فقط (زر ⚡)
       const synthDelay = _getSyntheticDelay();
-      const jitter = Math.round((Math.random() - 0.5) * 2 * CFG.DUAL_WSS_JITTER_MS);
-      const totalDelay = Math.max(0, synthDelay + jitter);
+      const jitter = CFG.DUAL_WSS_JITTER_MS ? Math.round((Math.random() - 0.5) * 2 * CFG.DUAL_WSS_JITTER_MS) : 0;
+      const totalDelay = Math.max(0, synthDelay + jitter + _timingOffset);
 
       if (totalDelay > 0) {
-        addLog('🔮 [DELAY] تأخير اصطناعي: ' + totalDelay + 'مللي ثانية (فجوة: ' +
-               Math.abs(_latencyGap).toFixed(0) + 'ms)', 'info');
+        addLog('🔮 [DELAY] تأخير: ' + totalDelay + 'مللي ثانية', 'info');
         if (_queueTimer) clearTimeout(_queueTimer);
         _queueTimer = setTimeout(() => {
           _queueTimer = null;
-          _executeDualTrade(signal.direction, signal.asset, tradeAmount);
+          _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount);
         }, totalDelay);
       } else {
-        _executeDualTrade(signal.direction, signal.asset, tradeAmount);
+        _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount);
       }
     }
 
     // ─── تنفيذ الصفقة عبر مقبس المنفذ المعترض ─────────────────────────
-    function _executeDualTrade(direction, asset, overrideAmount) {
+    // ═══ [V17] محرّك توقيت الدخول (ETE) ════════════════════════════════════
+    //   المشكلة: البوت يعرف الاتجاه لكن يدخل في اللحظة الخطأ (قبل أن يتحرك السعر)
+    //   الحل: لا تدخل إلا حين يوافق الزخم اللحظي (الميل) اتجاه الصفقة — وإلا انتظر
+    //   حتى يوافق ضمن مهلة قصيرة (جزء من عمر الصفقة)، أو ألغِ لتجنّب توقيت سيّئ.
+    function _entryAligned(asset, direction) {
+      const sl = OracleLab.microSlope(normalizeAsset(asset), CFG.ETE_SLOPE_MS);
+      if (!sl) return { ok: true, reason: 'no-data' };   // لا بيانات → لا تعطّل
+      // ✅ [FIX] الميل المبني على تيك أو تيكين = ضجيج (سبب خسارتي momentum/tick_pulse في السجل).
+      //   عامله كـ«مسطّح» → ETE_FLAT_WAITS ينتظر ميلاً حقيقياً بدل الدخول الفوري على الضجيج.
+      if ((sl.ticks || 0) < (CFG.ETE_MIN_TICKS || 3)) return { ok: true, reason: 'مسطّح', sl };
+      const min = CFG.ETE_MIN_REL;
+      if (direction === 'BUY') {
+        if (sl.rel >=  min) return { ok: true,  reason: 'صاعد✓', sl };
+        if (sl.rel <= -min) return { ok: false, reason: 'هابط✗', sl };
+      } else {
+        if (sl.rel <= -min) return { ok: true,  reason: 'هابط✓', sl };
+        if (sl.rel >=  min) return { ok: false, reason: 'صاعد✗', sl };
+      }
+      return { ok: true, reason: 'مسطّح', sl };           // محايد → اسمح
+    }
+    // مهلة الانتظار = نسبة من عمر الصفقة المحدّد في time (مع حدّ أدنى/أقصى)
+    function _eteMaxWait() {
+      if (CFG.ETE_MAX_WAIT_MS > 0) return CFG.ETE_MAX_WAIT_MS;   // override يدوي إن ضُبط
+      const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 5));
+      const ms = Math.round(durSec * 1000 * CFG.ETE_WAIT_FRAC);
+      return Math.max(CFG.ETE_WAIT_MIN_MS, Math.min(CFG.ETE_WAIT_MAX_MS, ms));
+    }
+    function _timedExecute(direction, asset, amount, count) {
+      if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount, count); return; }
+      if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
+      const maxWait = _eteMaxWait();
+      const durSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 5));
+      const deadline = Date.now() + maxWait;
+      const first = _entryAligned(asset, direction);
+      // [V24] الزخم المسطّح لا يدخل فوراً — ينتظر ميلاً حقيقياً (كل صفقات «مسطّح» خسرت)
+      const _flatBlocks = (CFG.ETE_FLAT_WAITS !== false) && first.reason === 'مسطّح';
+      if (first.ok && !_flatBlocks) {
+        if (first.sl) addLog('🎯 [ENTRY] دخول فوري — الزخم ' + first.reason + ' يوافق ' + direction, 'signal');
+        _executeDualTrade(direction, asset, amount, count); return;
+      }
+      const _waitWord = _flatBlocks ? 'بلا زخم (مسطّح)' : (first.reason + ' يعاكس');
+      addLog('⏳ [ENTRY] انتظار توقيت — الزخم ' + _waitWord + ' ' + direction + ' | مهلة ' + maxWait + 'ms (' + Math.round(CFG.ETE_WAIT_FRAC*100) + '% من ' + durSec + 'ث)', 'info');
+      _entryTimer = setInterval(() => {
+        if (!_running || tradeExec) { clearInterval(_entryTimer); _entryTimer = null; return; }
+        const c = _entryAligned(asset, direction);
+        if (c.ok && c.reason !== 'مسطّح') {
+          clearInterval(_entryTimer); _entryTimer = null;
+          addLog('🎯 [ENTRY] الزخم توافق (' + c.reason + ') — دخول ' + direction, 'signal');
+          _executeDualTrade(direction, asset, amount, count);
+        } else if (Date.now() >= deadline) {
+          clearInterval(_entryTimer); _entryTimer = null;
+          if (CFG.ETE_ON_TIMEOUT === 'enter') {
+            addLog('🎯 [ENTRY] انتهت المهلة — دخول رغم عدم التوافق ' + direction, 'info');
+            _executeDualTrade(direction, asset, amount, count);
+          } else {
+            addLog('🚫 [ENTRY] انتهت المهلة دون توافق — إلغاء ' + direction + ' (تجنّب توقيت سيّئ)', 'info');
+          }
+        }
+      }, CFG.ETE_POLL_MS);
+    }
+
+    function _executeDualTrade(direction, asset, overrideAmount, count) {
       if (!autoTrade) return;
       if (tradeExec) return;
       if (!tradeWSOrig || !tradeWS || tradeWS.readyState !== 1) {
@@ -4611,19 +5416,37 @@
         addLog('⚠️ [DUAL-WSS] لا يوجد مقبس — الإشارة محفوظة لإعادة المحاولة: ' + direction + ' | ' + asset, 'error');
         return;
       }
+      if (_shouldBlockSend(direction, asset)) return;   // ✅ [FIX-A/C]
       const action = direction === 'BUY' ? 'call' : 'put';
       const amt = overrideAmount || tradeAmount;
       const safeAmt = _safeAmount(amt);
-      const tradeSec = _tradeDuration || snapToPOTime(candlePeriod || 5);
-      const rid = _nextReqId();
+      const tradeSec = _snapTradeDuration(_tradeDuration || (candlePeriod || 3));
+      let nOrders = Math.max(1, Math.min(count || 1, 2));   // [V24-2X] حتى صفقتين
+      // [V25] فحص الرصيد — يمنع NotEnoughFunds: قلّل عدد الأوامر أو تخطَّ إن لم يكفِ
+      const _bal = (typeof currentBalance === 'number' && currentBalance > 0) ? currentBalance
+                 : (typeof accountBalance === 'number' && accountBalance > 0) ? accountBalance : 0;
+      if (_bal > 0) {
+        const affordable = Math.floor(_bal / safeAmt);
+        if (affordable < 1) {
+          addLog('🛑 [BALANCE] رصيد غير كافٍ ($' + _bal.toFixed(2) + ') لمبلغ $' + safeAmt + ' — تخطّي الصفقة', 'error');
+          return;
+        }
+        if (affordable < nOrders) {
+          nOrders = affordable;
+          addLog('⚠️ [BALANCE] الرصيد يكفي ' + nOrders + ' صفقة فقط — تقليص تلقائي', 'info');
+        }
+      }
 
       if (!_payloadCache.prefixCall) _rebuildPayloadCache();
       const prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
       const suffix = action === 'call' ? _payloadCache.suffixCall : _payloadCache.suffixPut;
-      const msg = prefix + rid + suffix;
 
       try {
-        tradeWSOrig(msg);
+        for (let k = 0; k < nOrders; k++) {
+          tradeWSOrig(prefix + _nextReqId() + suffix);   // [V24-2X] أمر فعلي لكل صفقة
+          _openTradesInFlight++;   // ✅ [FIX-C]
+        }
+        _inFlightDirection = direction;   // ✅ [FIX-C]
         tradeExec = true;
         lastTradeMs = Date.now();
         // ✅ تحرير تلقائي لـ tradeExec بعد مدة الصفقة + 5 ثواني أمان
@@ -4631,6 +5454,7 @@
         _tradeExecTimeout = setTimeout(() => {
           if (tradeExec) {
             tradeExec = false;
+            _openTradesInFlight = 0; _inFlightDirection = null;   // ✅ [FIX-C] أمان
             addLog('⏰ [DUAL-EXEC] تحرير تلقائي — لم تأتِ نتيجة خلال ' + (tradeSec + 5) + 'ث', 'info');
             updateTradeBtn();
           }
@@ -4642,11 +5466,12 @@
         PERF.mark('orderSent');
         _tradeCount++;
         _pendingTradeRecord = { asset: asset || activeAsset, direction, amount: safeAmt, openTs: Date.now(), source: 'dualWSS' };
+        try { const _la = normalizeAsset(asset || activeAsset); const _tb = tickBuffers[_la]; _pendingTradeRecord.lab = OracleLab.snapshot(_la, direction); _pendingTradeRecord.openPrice = (_tb && _tb.length) ? _tb[_tb.length-1] : 0; } catch(_) {}  // [V16] لقطة مختبر الأوراكل (مسار DUAL)
         // ✅ تحديث سعر آخر صفقة
         _lastTradePrice = _lastSignal ? _lastSignal.price : 0;
         // ✅ مسح الإشارة المعلقة بعد التنفيذ الناجح
         _pendingRetrySignal = null;
-        addLog('⚡ [DUAL-EXEC] ' + direction + ' | ' + (asset || activeAsset) + ' | $' + safeAmt + ' | ' + tradeSec + 'ث', 'signal');
+        addLog('⚡ [DUAL-EXEC] ' + direction + ' | ' + (asset || activeAsset) + ' | $' + safeAmt + (nOrders > 1 ? ' ×' + nOrders : '') + ' | ' + tradeSec + 'ث', 'signal');
         updateTradeBtn();
       } catch(err) {
         addLog('❌ [DUAL-WSS] فشل إرسال الأمر: ' + err.message, 'error');
@@ -4734,6 +5559,7 @@
     function shutdown() {
       _running = false;
       if (_queueTimer) { clearTimeout(_queueTimer); _queueTimer = null; }
+      if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
       _signalQueue = null;
       addLog('🔮 [DUAL-WSS] تم إيقاف النظام', 'info');
     }
@@ -4748,7 +5574,28 @@
       registerSocket,
       unregisterSocket,
       recordMsgTs,
+      recordOracleTick,
+      oracleAgrees,
+      onSignalsUpdate,
+      onChatSignal,
+      platformStrength,
+      // [V16] حالة الأوراكل الخام لزوج (لمختبر الأوراكل والمولّد)
+      oracleState: (asset) => {
+        const a = normalizeAsset(asset);
+        const cs = _chatSig[a], ps = _platSig[a], now = Date.now();
+        return {
+          chatDir: cs ? cs.dir : null,
+          chatTf:  cs ? cs.tf : null,
+          chatAge: cs ? (now - cs.ts) : null,
+          platBest: platformStrength(a),
+          platTf:  ps ? Object.assign({}, ps.tf) : {},
+          platAge: ps ? (now - ps.ts) : null,
+        };
+      },
       onCandleClose,
+      fastEval,
+      tickPulse,
+      getOpportunities,
       onPlatformSignal,
       getLatencyGap:     () => _latencyGap,
       getLastSignal:     () => _lastSignal,
@@ -4766,6 +5613,17 @@
       getConsecutiveSameDir: () => _consecutiveSameDir,
       resetConsecutiveOnLoss: () => { _consecutiveSameDir = 0; _lastTradeDirection = null; },
       onTradeResult: (win, direction) => {
+        // ✅ [V13.4] سجّل نتيجة النمط الحي للثقة التكيفية (النمط متاح في هذا النطاق)
+        try {
+          const _pat = (typeof _lastExecutedPattern === 'string' && _lastExecutedPattern)
+            ? _lastExecutedPattern.split(':')[0] : null;
+          if (_pat) {
+            _recordPatternResult(_pat, win);
+            const s = _patternWL[_pat];
+            addLog('📊 [PATTERN-WL] ' + _pat + ' → ' + (win ? 'فوز' : 'خسارة') +
+                   ' | الحي: ' + s.w + 'ف/' + s.l + 'خ', 'info');
+          }
+        } catch(_) {}
         if (!win) {
           // خسارة → إعادة تعيين العداد المتتالي (لأن الاتجاه فشل)
           _consecutiveSameDir = 0;
