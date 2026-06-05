@@ -271,6 +271,17 @@
     RETRACE_FILTER_ENABLED   : true,       // ✅ انتظر ارتداد تيك واحد بعد القفزة الحادة قبل الدخول
     RETRACE_WIN_MS           : 500,        // نافذة كشف القفزة الحادة
     RETRACE_REL              : 0.000030,   // قفزة > هذا العائد في < RETRACE_WIN_MS = حادة → انتظر الارتداد
+    // ─── [V28 / §F1] بوابة تنبؤات المنصة (Signals room UP2/DOWN2) — fail-open ──────
+    //   المصدر الوحيد الحقيقي لـ«النظرة المسبقة» على هذا الوسيط (لا يوجد دفتر أوامر).
+    //   يستخدم اتجاه تنبؤ المنصة + قوتها الرقمية (0-4) لتأكيد/حجب إشارات السكالب.
+    //   غياب التنبؤ للزوج النشط لا يحجب التداول (fail-open) — كما في سجل الالتقاط.
+    FORECAST_GATE_ENABLED    : true,       // ✅ [V28] فعّل بوابة التنبؤ
+    FORECAST_CONFIRM_TTL_MS  : 90000,      // عمر التنبؤ المقبول للتأكيد (90ث)
+    FORECAST_VETO_TTL_MS     : 300000,     // عمر التنبؤ المعاكس الذي يحجب (5د)
+    FORECAST_VETO_MAX_TF_MIN : 15,         // لا تحجب إلا إذا كان فريم التنبؤ ≤ هذا (M15 وأقصر)
+    FORECAST_CONFIRM_BONUS   : 6,          // زيادة الثقة عند توافق التنبؤ
+    FORECAST_PLAT_MIN_STR    : 3,          // قوة المنصة (0-4) ≥ هذا تُعتبر تأكيداً
+    FORECAST_PLAT_BONUS      : 4,          // زيادة الثقة عند قوة منصة كافية
     // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
     ORACLE_LAB_ENABLED      : true,        // ✅ تسجيل خام: يربط كل صفقة بمصدرها ونتيجتها (آمن)
     ORACLE_LAB_REPORT_EVERY : 10,          // اطبع جدول الأداء كل N صفقة
@@ -4861,6 +4872,33 @@
         _counterTrend = true;
         _effConf -= CFG.TREND_SOFT_PENALTY;
         addLog('⚠️ [TREND-SOFT] ' + signal.direction + ' عكس الاتجاه ' + _lastTrendDirection + ' — خصم ' + CFG.TREND_SOFT_PENALTY + '% (ثقة: ' + _effConf + '%)', 'info');
+      }
+
+      // ═══ [V28 / §F1] بوابة تنبؤات المنصة (غرفة Signals: UP2/DOWN2) — fail-open ═══
+      //   التنبؤ متاح فقط للأزواج التي تبثّها المنصة؛ غيابه لا يحجب (نتداول طبيعياً).
+      //   توافق طازج → زيادة ثقة | تعارض طازج بفريم قصير → حجب | لا تنبؤ → مرور.
+      //   تُطبَّق قبل فلتر الثقة كي يرفع التأكيدُ الإشارةَ فوق الأرضية.
+      let _forecastConfirmed = false;
+      if (CFG.FORECAST_GATE_ENABLED && DualWSSManager.oracleState) {
+        const _os = DualWSSManager.oracleState(signal.asset);
+        const _fd = _os.chatDir, _fAge = _os.chatAge, _fTf = _os.chatTf;
+        const _tfMin = (function (t) { const m = /M(\d+)/i.exec(t || ''); return m ? +m[1] : 9999; })(_fTf);
+        if (_fd && _fAge != null) {
+          if (_fd === signal.direction && _fAge <= CFG.FORECAST_CONFIRM_TTL_MS) {
+            _effConf = Math.min(97, _effConf + CFG.FORECAST_CONFIRM_BONUS);
+            _forecastConfirmed = true;
+            addLog('🛰️ [FORECAST] ' + signal.direction + ' يوافق تنبؤ المنصة (' + _fTf + ', عمر ' + Math.round(_fAge / 1000) + 'ث) → ثقة ' + _effConf + '%', 'signal');
+          } else if (_fd !== signal.direction && _fAge <= CFG.FORECAST_VETO_TTL_MS && _tfMin <= CFG.FORECAST_VETO_MAX_TF_MIN) {
+            addLog('🛰️ [FORECAST-VETO] ' + signal.direction + ' مرفوض — تنبؤ المنصة ' + _fd + ' (' + _fTf + ', عمر ' + Math.round(_fAge / 1000) + 'ث)', 'info');
+            return;
+          }
+        }
+        // قوة المنصة الرقمية (0-4) كتأكيد إضافي حين لا يوجد اتجاه شات صريح
+        if (!_forecastConfirmed && (_os.platBest || 0) >= CFG.FORECAST_PLAT_MIN_STR) {
+          _effConf = Math.min(97, _effConf + CFG.FORECAST_PLAT_BONUS);
+          _forecastConfirmed = true;
+          addLog('🛰️ [FORECAST] قوة منصة ' + _os.platBest + '/4 تؤكّد ' + signal.direction + ' → ثقة ' + _effConf + '%', 'info');
+        }
       }
 
       // فلتر ثقة أدنى
