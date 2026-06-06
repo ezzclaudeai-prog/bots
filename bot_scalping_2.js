@@ -628,9 +628,19 @@
   function getTopPatterns(n) { return []; }
   function recordPatternResult() {}
   function _savePatternStats() {}
-  function recordTrade(win, wasTVE) {
+  function recordTrade(win, wasTVE, isTie) {
     STATS.total++;
-    // ملاحظة: تسجيل أداء النمط الحي يتم داخل DualWSSManager.onTradeResult (حيث النمط في النطاق)
+    // ✅ [TIE] تعادل (profit=0): المنصة تُعيد الرهان — تعادل لا خسارة. لا نلمس السلاسل
+    //   ولا نُفعّل وقف الخسائر/الغوست (كان يُحسب −100 خطأً ويُبطّئ البوت).
+    if (isTie) {
+      if (_openTradesInFlight > 0) _openTradesInFlight--;
+      if (_openTradesInFlight === 0) _inFlightDirection = null;
+      STATS.ties = (STATS.ties || 0) + 1;
+      tradeExec = false;
+      if (_tradeExecTimeout) { clearTimeout(_tradeExecTimeout); _tradeExecTimeout = null; }
+      saveStats(); updateStatsUI(); updateTradeBtn();
+      return;
+    }
     if (win) {
       if (_openTradesInFlight > 0) _openTradesInFlight--;   // ✅ [FIX-C]
       if (_openTradesInFlight === 0) _inFlightDirection = null;
@@ -1639,6 +1649,7 @@
     const deal = data.deals[0];
     if (botOrderIds.size > 0 && !botOrderIds.has(deal.id)) { addLog('📊 صفقة منصة: '+(deal.profit>0?'+':'')+(deal.profit||0).toFixed(2)+'$','info'); return; }
     if (deal.id) botOrderIds.delete(deal.id);
+    const tie = (deal.profit === 0);        // ✅ [TIE] تعادل/استرداد — ليس خسارة
     const win = deal.profit > 0;
     let rawPayout = null;
     if (typeof deal.percentProfit === 'number' && deal.percentProfit >= 50 && deal.percentProfit <= 100) {
@@ -1651,10 +1662,11 @@
       if (deal.asset) _assetPayouts.set(normalizeAsset(deal.asset), rawPayout);
       if (win) addLog('📊 [PAYOUT] نسبة العائد: ' + Math.round(rawPayout * 100) + '%', 'info');
     }
-    recordTrade(win, _lastTradeWasTVE);
-    try { OracleLab.recordClose(_pendingTradeRecord, win, _pendingTradeRecord && _pendingTradeRecord.openPrice, deal.closePrice || deal.price || 0); } catch(_) {}  // [V16] ربط النتيجة بمصدر الأوراكل
-    const sym = win ? '✅' : '❌', amount = win ? '+'+deal.profit?.toFixed(2)+'$' : '-'+deal.amount+'$';
-    addLog(sym+' '+amount, win?'signal':'error');
+    recordTrade(win, _lastTradeWasTVE, tie);
+    try { if (!tie) OracleLab.recordClose(_pendingTradeRecord, win, _pendingTradeRecord && _pendingTradeRecord.openPrice, deal.closePrice || deal.price || 0); } catch(_) {}  // [V16] لا نُلوّث إحصاء المختبر بالتعادل
+    const sym = tie ? '➖' : (win ? '✅' : '❌');
+    const amount = tie ? '0$ (تعادل — استُرد الرهان)' : (win ? '+'+deal.profit?.toFixed(2)+'$' : '-'+deal.amount+'$');
+    addLog(sym+' '+amount, tie ? 'info' : (win?'signal':'error'));
     _lastTradeWasDouble = false; tradeExec = false; updateTradeBtn();
     // v12.11 [DB] Persist trade
     const _rec = _pendingTradeRecord || {};
@@ -1663,7 +1675,7 @@
       closeTs: Date.now(),
       orderId: _rec.orderId || deal.id,
       asset: _rec.asset || normalizeAsset(deal.asset || activeAsset || ''),
-      result: win ? 'win' : 'loss',
+      result: tie ? 'tie' : (win ? 'win' : 'loss'),
       profit: deal.profit ?? 0,
       amount: _rec.amount || deal.amount || 0,
     });
@@ -5038,7 +5050,13 @@
       if (!CFG.PATTERN_REARM_ENABLED) return false;
       const key = signal.pattern + ':' + signal.asset;
       const now = Date.now();
-      // نافذة إعادة التسليح: الأكبر من (2× مدة الشمعة) أو (الحد الأدنى 15 ثانية)
+      // ✅ [SPEED] tick_pulse محرّك تيكات مستمر — لا يخضع لحاجز الشمعة (كان 30ث على فريم 15ث!).
+      //   يكتفي بتهدئته الذاتية القصيرة (TICKPULSE_COOLDOWN_MS) → صفقات أكثر بكثير.
+      if (signal.pattern === 'tick_pulse') {
+        if (_lastExecutedPattern === key && (now - _lastExecutedPatternTs) < (CFG.TICKPULSE_COOLDOWN_MS || 1500)) return true;
+        return false;
+      }
+      // نافذة إعادة التسليح: الأكبر من (2× مدة الشمعة) أو (الحد الأدنى)
       const frameBased = (candlePeriod > 0 ? candlePeriod : 15) * 1000 * 2;
       const rearmWindow = Math.max(CFG.PATTERN_REARM_MIN_MS, frameBased);
       if (_lastExecutedPattern === key && (now - _lastExecutedPatternTs) < rearmWindow) {
