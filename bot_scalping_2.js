@@ -211,8 +211,15 @@
     TICKPULSE_WIN_MS        : 2400,        // ✅ [FIX] التيك الحقيقي ~470ms → نافذة 900ms = تيكان فقط (ضجيج). 2400ms ≈ 5 تيكات
     TICKPULSE_MIN_TICKS     : 4,           // أدنى عدد تيكات في النافذة (الآن قابل للتحقق فعلياً ضمن 2400ms)
     TICKPULSE_MIN_REL       : 0.000060,   // أدنى عائد نسبي ليُعدّ اندفاعاً قوياً
-    TICKPULSE_COOLDOWN_MS   : 3000,        // تهدئة بين نبضتين
+    TICKPULSE_COOLDOWN_MS   : 1500,        // ✅ [SPEED] 3000→1500: نبضات أكثر تكراراً
     TICKPULSE_BASE_CONF     : 70,          // ثقة أساس النبض (تتدرّج مع القوة)
+    // ─── [REVERSION] وضع الارتداد لنبض التيك — مبني على إثبات الباكتيست ────────
+    //   الباكتيست على تيكاتك الحقيقية: الزخم/الاستمرار 46.6% (−10.5% EV)، أما
+    //   الارتداد (الدخول عكس الاندفاع) 53.4% (+2.5% EV)، والاندفاع الضعيف يرتد 63%.
+    //   لذا: ندخل عكس الاندفاع، نفضّل الضعيف/المتوسط، ونتخطّى القوي (تعادل 49%).
+    TICKPULSE_MODE          : 'reversion', // 'reversion' = ادخل عكس الاندفاع | 'momentum' | 'off'
+    TICKPULSE_REV_MAX_STRENGTH : 2.5,      // تخطَّ الاندفاع الأقوى من 2.5× (تعادل — لا حافة)
+    TICKPULSE_REV_CONF      : 88,          // ثقة ثابتة لإشارة الارتداد (تجتاز العتبات والاتجاه)
     // ─── [V24] أرضية ثقة صارمة + صفقتان حقيقيتان ──────────────────────────────
     ABSOLUTE_MIN_CONF       : 60,          // [V24] لا صفقة تحت 60% مهما كان السلايدر
     TWO_TRADES_ENABLED      : true,        // ✅ صفقتان حقيقيتان (أمران فعليان) عند التأكد
@@ -4759,30 +4766,45 @@
       if (!buf || buf.length < 3) return;                          // نحتاج اتجاهاً
       const s = OracleLab.microSlope(a, CFG.TICKPULSE_WIN_MS);
       if (!s || s.ticks < CFG.TICKPULSE_MIN_TICKS || Math.abs(s.rel) < CFG.TICKPULSE_MIN_REL) return;
-      const dir = s.rel > 0 ? 'BUY' : 'SELL';
-      // اتّساق: نافذتان أقصر توافقان الاتجاه (الزخم يبني لا يرتد لحظياً)
+      const burstDir = s.rel > 0 ? 'BUY' : 'SELL';   // اتجاه الاندفاع نفسه
+      // اتّساق: نافذتان أقصر توافقان اتجاه الاندفاع (اندفاع حقيقي لا ضجيج)
       const s2 = OracleLab.microSlope(a, Math.round(CFG.TICKPULSE_WIN_MS / 2));
       const sShort = OracleLab.microSlope(a, 300);
       const consistent = s2 && sShort &&
-        ((dir === 'BUY'  && s2.rel >= 0 && sShort.rel >= 0) ||
-         (dir === 'SELL' && s2.rel <= 0 && sShort.rel <= 0));
+        ((burstDir === 'BUY'  && s2.rel >= 0 && sShort.rel >= 0) ||
+         (burstDir === 'SELL' && s2.rel <= 0 && sShort.rel <= 0));
       if (!consistent) return;
-      // [V25] لا تطلق نبضة على اندفاع يتباطأ (استنفاد): اشترط ألا تعاكس العجلة الاتجاه بقوة.
-      //   هذا يحجب اندفاعات «الاتجاه صحيح لكن انتهى» التي كانت تدخل عند القمة/القاع وتخسر خلال 3ث.
-      if (CFG.ETE_ACCEL_ENABLED) {
-        const ac = OracleLab.microAccel(a, CFG.ETE_ACCEL_MS);
-        const sign = (dir === 'BUY') ? 1 : -1;
-        if (ac && (ac.ticks || 0) >= CFG.ETE_ACCEL_MIN_TICKS && ac.accel * sign <= -CFG.ETE_ACCEL_DECEL_REL) {
-          return;   // الزخم يتباطأ عكس الاتجاه → تجاهل النبضة
-        }
-      }
+
       const strength = Math.abs(s.rel) / CFG.TICKPULSE_MIN_REL;    // ≥1
-      const conf = Math.max(CFG.TICKPULSE_BASE_CONF, Math.min(90, Math.round(CFG.TICKPULSE_BASE_CONF + (strength - 1) * 8)));
+      const mode = CFG.TICKPULSE_MODE || 'momentum';
+      let dir, conf, reversion = false;
+
+      if (mode === 'reversion') {
+        // ✅ [REVERSION] ادخل عكس الاندفاع. تخطَّ الاندفاع القوي (تعادل ~49%).
+        //   لا نطبّق حارس الاستنفاد هنا — تباطؤ الزخم *يؤكّد* الارتداد لا يمنعه.
+        if (strength >= (CFG.TICKPULSE_REV_MAX_STRENGTH || 2.5)) return;
+        dir = (burstDir === 'BUY') ? 'SELL' : 'BUY';
+        conf = CFG.TICKPULSE_REV_CONF || 88;
+        reversion = true;
+      } else if (mode === 'off') {
+        return;
+      } else {
+        // الوضع القديم (زخم/استمرار) — مع حارس الاستنفاد
+        dir = burstDir;
+        if (CFG.ETE_ACCEL_ENABLED) {
+          const ac = OracleLab.microAccel(a, CFG.ETE_ACCEL_MS);
+          const sign = (dir === 'BUY') ? 1 : -1;
+          if (ac && (ac.ticks || 0) >= CFG.ETE_ACCEL_MIN_TICKS && ac.accel * sign <= -CFG.ETE_ACCEL_DECEL_REL) return;
+        }
+        conf = Math.max(CFG.TICKPULSE_BASE_CONF, Math.min(90, Math.round(CFG.TICKPULSE_BASE_CONF + (strength - 1) * 8)));
+      }
+
       const tb = tickBuffers[a];
       const price = (tb && tb.length) ? tb[tb.length - 1] : 0;
-      addLog('⚡ [TICKPULSE] اندفاع ' + dir + ' | ميل ' + (s.rel * 1e6).toFixed(1) + 'e-6 (' + s.ticks + ' تيك/' + CFG.TICKPULSE_WIN_MS + 'ms) | ثقة ' + conf + '%', 'signal');
+      addLog('⚡ [TICKPULSE] ' + (reversion ? 'ارتداد ضد اندفاع ' + burstDir + ' → ' + dir : 'اندفاع ' + dir) +
+             ' | ميل ' + (s.rel * 1e6).toFixed(1) + 'e-6 (' + s.ticks + ' تيك/' + CFG.TICKPULSE_WIN_MS + 'ms) | ثقة ' + conf + '%', 'signal');
       _pulseCooldownUntil = now + CFG.TICKPULSE_COOLDOWN_MS;
-      _processSignal({ direction: dir, asset: a, price, confidence: conf, pattern: 'tick_pulse', timestamp: now });
+      _processSignal({ direction: dir, asset: a, price, confidence: conf, pattern: 'tick_pulse', timestamp: now, reversion });
     }
 
     // ─── كشف إشارة عند إغلاق شمعة ─────────────────────────────────────
@@ -4841,7 +4863,9 @@
 
       // ✅ [V13.4] ثقة تكيفية — ارفع عتبة القبول للأنماط الخاسرة حياً، وعطّل الضعيف جداً
       const _adapt = _adaptiveConfGate(signal.pattern);
-      const _effThreshold = Math.max(_minConfThreshold + _adapt.bump, CFG.ABSOLUTE_MIN_CONF);  // [V24] أرضية صارمة 60%
+      // ✅ [REVERSION] إشارة الارتداد تستخدم الأرضية الصارمة فقط (لها منطقها الخاص)
+      const _effThreshold = signal.reversion ? CFG.ABSOLUTE_MIN_CONF
+                          : Math.max(_minConfThreshold + _adapt.bump, CFG.ABSOLUTE_MIN_CONF);  // [V24] أرضية صارمة 60%
       if (_adapt.disabled) {
         const _k = signal.pattern, _nowOff = Date.now();   // [V25] خنق التكرار: مرة كل 15ث للنمط
         if (!_patternOffLog[_k] || _nowOff - _patternOffLog[_k] > 15000) {
@@ -4854,7 +4878,7 @@
       // ✅ [V13.6] فلتر الاتجاه — 'hard'=حظر | 'soft'=خصم ثقة
       let _effConf = signal.confidence;
       let _counterTrend = false;
-      if (!_trendAllows(signal.direction)) {
+      if (!signal.reversion && !_trendAllows(signal.direction)) {   // ✅ [REVERSION] لا فلتر اتجاه للارتداد
         if (CFG.TREND_FILTER_MODE === 'hard') {
           addLog('🚫 [TREND-BLOCK] ' + signal.direction + ' ممنوع — الاتجاه: ' + _lastTrendDirection, 'info');
           return;
@@ -4884,7 +4908,7 @@
       // ═══ [DISCIPLINE] انضباط 17/5: المحرّكات الزائدة (نبض التيك/الاستمرار) تتطلّب
       //   تأكيد أوراكل صريحاً — لا تتداول على زخم وحده (مصدر خسائر V2). أنماط الشموع
       //   المؤكَّدة تبقى كما هي (نواة 17/5 الرابحة).
-      if (CFG.DISCIPLINE_ORACLE_FOR_ENGINES !== false &&
+      if (CFG.DISCIPLINE_ORACLE_FOR_ENGINES !== false && !signal.reversion &&   // ✅ [REVERSION] معفاة من شرط الأوراكل
           (signal.pattern === 'tick_pulse' || signal.pattern === 'momentum_continuation') &&
           !_oracleConfirmed) {
         addLog('🧭 [DISCIPLINE] ' + signal.pattern + ' مرفوض — يتطلّب تأكيد أوراكل صريح (انضباط 17/5)', 'info');
@@ -5310,7 +5334,7 @@
 
       // ✅ [FIX-E] حارس جراحي: ارفض تقاطع (معاكس للاتجاه + ثقة حدّية + زخم آني رقيق n1/n2)
       //   هذا التقاطع بالضبط هو ملف الخسائر الأربع في السجل. الإشارات القوية لا تتأثر.
-      if (CFG.FIXE_ENABLED) {
+      if (CFG.FIXE_ENABLED && !signal.reversion) {   // ✅ [REVERSION] معفاة من حارس الزخم الرقيق/المعاكس
         const _ctE = !_trendAllows(signal.direction) && _lastTrendDirection !== 'NEUTRAL';
         const _slE = OracleLab.microSlope(normalizeAsset(signal.asset), CFG.FIXE_THIN_SLOPE_MS);
         const _thinE = !_slE || (_slE.ticks || 0) <= CFG.FIXE_THIN_TICKS;
@@ -5356,7 +5380,8 @@
       const _execAmount = tradeAmount;
       let _tradeCount = 1;
       // ✅ [FIX-F] لا تضاعف بعد خسائر متتالية — خسارة ×2 تضاعف النزيف
-      const _allowDoubleF = (STATS.lossStreak || 0) < (CFG.FIXF_NO_DOUBLE_AFTER_LOSSES || 2);
+      //   ✅ [REVERSION] ولا نضاعف صفقات الارتداد (حافتها رقيقة — حماية على بيانات قليلة)
+      const _allowDoubleF = !signal.reversion && (STATS.lossStreak || 0) < (CFG.FIXF_NO_DOUBLE_AFTER_LOSSES || 2);
       if (!_allowDoubleF && CFG.TWO_TRADES_ENABLED && (signal.confidence || 0) >= CFG.TWO_TRADES_MIN_CONF) {
         addLog('🛡️ [FIX-F] لا مضاعفة — ' + STATS.lossStreak + ' خسائر متتالية → صفقة واحدة فقط', 'info');
       }
@@ -5377,10 +5402,10 @@
         if (_queueTimer) clearTimeout(_queueTimer);
         _queueTimer = setTimeout(() => {
           _queueTimer = null;
-          _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount);
+          _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount, signal.reversion);
         }, totalDelay);
       } else {
-        _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount);
+        _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount, signal.reversion);
       }
     }
 
@@ -5428,7 +5453,9 @@
       const ms = Math.round(durSec * 1000 * CFG.ETE_WAIT_FRAC);
       return Math.max(CFG.ETE_WAIT_MIN_MS, Math.min(CFG.ETE_WAIT_MAX_MS, ms));
     }
-    function _timedExecute(direction, asset, amount, count) {
+    function _timedExecute(direction, asset, amount, count, isReversion) {
+      // ✅ [REVERSION] دخول فوري عند الطرف — لا ننتظر محاذاة الزخم (الارتداد يدخل ضد الميل عمداً)
+      if (isReversion) { _executeDualTrade(direction, asset, amount, count); return; }
       if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount, count); return; }
       if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
       const maxWait = _eteMaxWait();
