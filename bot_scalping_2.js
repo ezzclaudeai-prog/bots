@@ -134,7 +134,8 @@
     RECALIBRATE_ON_STREAK   : 3,          // إعادة معايرة بعد N خسائر متتالية
     RECALIBRATE_DURATION_MS : 45000,      // مدة إعادة المعايرة القصوى (45 ثانية)
     RECALIBRATE_MIN_TREND_CANDLES : 3,    // عدد الشموع المتتالية المطلوبة لإنهاء إعادة المعايرة
-    CANDLE_LOCK_ENABLED     : true,        // منع التداول في نفس الشمعة مرتين
+    CANDLE_LOCK_ENABLED     : true,        // منع الإفراط في التداول داخل الشمعة الواحدة
+    MAX_TRADES_PER_CANDLE   : 3,           // ✅ [SCALP] أقصى صفقات في الشمعة (3ث على فريم 15ث ≈ تتسع لعدة صفقات)
     TRADE_COOLDOWN_RATIO    : 0.25,       // نسبة التهدئة من مدة الشمعة
     TRADE_COOLDOWN_FLOOR_MS : 500,        // الحد الأدنى للتهدئة
     LOSS_STREAK_PAUSE_MS    : 10000,      // وقف بعد خسائر متتالية (10ث بدل 45ث — لا نعطل 3 شموع)
@@ -367,6 +368,7 @@
   let _recalibrating    = false;
   let _recalibrateUntil = 0;
   let _lastTradeCandleKey = null;
+  let _candleTradeCount   = 0;     // ✅ [SCALP] عدّاد صفقات الشمعة الحالية
   let _tradeExecTimeout  = null;       // مؤقت تحرير tradeExec التلقائي
   let _pendingRetrySignal = null;      // إشارة معلقة لإعادة المحاولة عند إعادة الاتصال
   let _lastTrendDirection = 'NEUTRAL';
@@ -4604,7 +4606,10 @@
       if (!CFG.CANDLE_LOCK_ENABLED) return false;
       const key = _getCandleKey(asset);
       if (!key) return false;
-      return key === _lastTradeCandleKey;
+      // ✅ [SCALP] اسمح بعدّة صفقات في الشمعة الواحدة (سكالبينغ 3ث على فريم 15ث).
+      //   القفل يُفعَّل فقط بعد بلوغ MAX_TRADES_PER_CANDLE في نفس الشمعة.
+      if (key !== _lastTradeCandleKey) return false;
+      return _candleTradeCount >= (CFG.MAX_TRADES_PER_CANDLE || 3);
     }
 
     // ─── التهدئة التكيفية — حسب مدة الشمعة ────────────────────────────
@@ -5564,8 +5569,10 @@
         }, (tradeSec + 5) * 1000);
         // تهدهة تكيفية حسب مدة الشمعة
         _cooldownUntil = Date.now() + getAdaptiveCooldown();
-        // قفل الشمعة الحالية
-        _lastTradeCandleKey = _getCandleKey(asset);
+        // قفل الشمعة الحالية — عدّاد صفقات لكل شمعة (يسمح بعدّة صفقات سكالبينغ في نفس الشمعة)
+        const _ck = _getCandleKey(asset);
+        if (_ck === _lastTradeCandleKey) _candleTradeCount++;
+        else { _lastTradeCandleKey = _ck; _candleTradeCount = 1; }
         PERF.mark('orderSent');
         _tradeCount++;
         _pendingTradeRecord = { asset: asset || activeAsset, direction, amount: safeAmt, openTs: Date.now(), source: 'dualWSS' };
