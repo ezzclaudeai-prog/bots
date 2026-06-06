@@ -134,8 +134,7 @@
     RECALIBRATE_ON_STREAK   : 3,          // إعادة معايرة بعد N خسائر متتالية
     RECALIBRATE_DURATION_MS : 45000,      // مدة إعادة المعايرة القصوى (45 ثانية)
     RECALIBRATE_MIN_TREND_CANDLES : 3,    // عدد الشموع المتتالية المطلوبة لإنهاء إعادة المعايرة
-    CANDLE_LOCK_ENABLED     : true,        // منع الإفراط في التداول داخل الشمعة الواحدة
-    MAX_TRADES_PER_CANDLE   : 3,           // ✅ [SCALP] أقصى صفقات في الشمعة (3ث على فريم 15ث ≈ تتسع لعدة صفقات)
+    CANDLE_LOCK_ENABLED     : true,        // منع التداول في نفس الشمعة مرتين
     TRADE_COOLDOWN_RATIO    : 0.25,       // نسبة التهدئة من مدة الشمعة
     TRADE_COOLDOWN_FLOOR_MS : 500,        // الحد الأدنى للتهدئة
     LOSS_STREAK_PAUSE_MS    : 10000,      // وقف بعد خسائر متتالية (10ث بدل 45ث — لا نعطل 3 شموع)
@@ -218,15 +217,7 @@
     //   الباكتيست على تيكاتك الحقيقية: الزخم/الاستمرار 46.6% (−10.5% EV)، أما
     //   الارتداد (الدخول عكس الاندفاع) 53.4% (+2.5% EV)، والاندفاع الضعيف يرتد 63%.
     //   لذا: ندخل عكس الاندفاع، نفضّل الضعيف/المتوسط، ونتخطّى القوي (تعادل 49%).
-    TICKPULSE_MODE          : 'reversion', // المُثبَت (تحبّه). بدائل: 'auto'=PredictLab يختار لكل أصل | 'momentum' | 'off'
-                                           //   ملاحظة: 'auto' سيُسكت الأصول التي قياسها ≈ تعادل (مثل AEDCNY على عيّنة كبيرة)
-    // ─── [TASK-1] PredictLab — مقياس قابلية التنبؤ لكل أصل ─────────────────
-    PREDICT_LAB_ENABLED     : true,        // قِس حياً: هل آخر Nms يتنبّأ بالـ3ث القادمة؟
-    PREDICT_HORIZON_MS      : 3000,        // أفق التقييم = مدة الصفقة (3ث)
-    PREDICT_MIN_SAMPLES     : 25,          // أدنى عينة قبل التوصية (قبلها: إحماء → ارتداد)
-    PREDICT_REPORT_EVERY    : 25,          // تقرير كل N تقييم
-    PREDICT_EDGE_MARGIN     : 0.0,         // فوق التعادل فقط (التعادل@92%=52.1%؛ الارتداد المقيس ~53% يجتازه)
-                                           //   ارفعه لو أردت تشدّداً أكثر (سيُسكت الأصول حافتها رقيقة)
+    TICKPULSE_MODE          : 'reversion', // 'reversion' = ادخل عكس الاندفاع | 'momentum' | 'off'
     TICKPULSE_REV_MAX_STRENGTH : 2.5,      // تخطَّ الاندفاع الأقوى من 2.5× (تعادل — لا حافة)
     TICKPULSE_REV_CONF      : 88,          // ثقة ثابتة لإشارة الارتداد (تجتاز العتبات والاتجاه)
     // ─── [V24] أرضية ثقة صارمة + صفقتان حقيقيتان ──────────────────────────────
@@ -376,7 +367,6 @@
   let _recalibrating    = false;
   let _recalibrateUntil = 0;
   let _lastTradeCandleKey = null;
-  let _candleTradeCount   = 0;     // ✅ [SCALP] عدّاد صفقات الشمعة الحالية
   let _tradeExecTimeout  = null;       // مؤقت تحرير tradeExec التلقائي
   let _pendingRetrySignal = null;      // إشارة معلقة لإعادة المحاولة عند إعادة الاتصال
   let _lastTrendDirection = 'NEUTRAL';
@@ -536,71 +526,6 @@
     return { onTick, microSlope, microAccel, lastSpike, snapshot, recordClose, report, _stats: stats };
   })();
   try { W._oracleLabReport = () => OracleLab.report(); } catch (_) {}
-
-  // ══════════════════════════════════════════════════════════════════════
-  // § PredictLab — مقياس قابلية التنبؤ لكل أصل  [TASK-1]
-  //   لكل أصل: عند كل تيك نحسب اتجاه الميل على نافذة النبض، ثم بعد أفق الصفقة
-  //   (PREDICT_HORIZON_MS) نقيس هل كان «الزخم» (اتباع الاندفاع) أم «الارتداد»
-  //   (عكسه) سيربح. نراكم النسبتين لكل أصل ونوصي بالوضع الأفضل إحصائياً.
-  //   هذا يجيب عملياً: «هل آخر Nms يتنبّأ بالـ3ث القادمة؟» — بلا جهاز ثانٍ،
-  //   لأن الفرق الكموني بين جهازين = نفس هذه المعلومة (ماضي السعر) لا أكثر.
-  // ══════════════════════════════════════════════════════════════════════
-  const PredictLab = (function () {
-    const state = {};   // asset -> { ticks:[{t,p}], pend:[{t,p,dir}], mom:{w,l}, rev:{w,l}, n }
-    function get(a) { return state[a] || (state[a] = { ticks: [], pend: [], mom: { w: 0, l: 0 }, rev: { w: 0, l: 0 }, n: 0 }); }
-    function _wr(o) { const t = o.w + o.l; return t ? o.w / t : 0; }
-    function _pct(o) { const t = o.w + o.l; return t ? Math.round(100 * o.w / t) + '%' : '—'; }
-
-    function onTick(a, price, t) {
-      if (!CFG.PREDICT_LAB_ENABLED) return;
-      const s = get(a);
-      s.ticks.push({ t, p: price });
-      if (s.ticks.length > 1000) s.ticks.shift();
-      const win = CFG.TICKPULSE_WIN_MS || 2400;
-      const minTicks = CFG.TICKPULSE_MIN_TICKS || 4;
-      const minRel = CFG.TICKPULSE_MIN_REL || 0.00006;
-      // اتجاه الاندفاع الحالي على نافذة النبض
-      let i = s.ticks.length - 1; while (i > 0 && s.ticks[i].t > t - win) i--;
-      const p0 = s.ticks[i].p, n = s.ticks.length - 1 - i;
-      let dir = 0;
-      if (p0 > 0 && n >= minTicks) { const rel = (price - p0) / p0; if (Math.abs(rel) >= minRel) dir = rel > 0 ? 1 : -1; }
-      if (dir !== 0) s.pend.push({ t, p: price, dir });
-      // تنضيج التقييمات التي بلغت الأفق
-      const H = CFG.PREDICT_HORIZON_MS || 3000;
-      while (s.pend.length && (t - s.pend[0].t) >= H) {
-        const e = s.pend.shift();
-        const move = price - e.p;
-        if (Math.abs(move) < 1e-12) continue;   // تعادل → تجاهل
-        if (move * e.dir > 0) s.mom.w++; else s.mom.l++;      // الزخم يراهن باتجاه الاندفاع
-        if (move * (-e.dir) > 0) s.rev.w++; else s.rev.l++;   // الارتداد يراهن عكسه
-        s.n++;
-        if (s.n % (CFG.PREDICT_REPORT_EVERY || 25) === 0) {
-          addLog('🔭 [PREDICT] ' + a + ' | زخم ' + _pct(s.mom) + ' | ارتداد ' + _pct(s.rev) +
-                 ' | عينة ' + s.n + ' → موصى: ' + (recommendedMode(a) || 'إحماء'), 'info');
-        }
-      }
-    }
-
-    // يرجع 'momentum' | 'reversion' | 'off' عند توفّر عينة كافية، وإلا null (إحماء)
-    function recommendedMode(a) {
-      const s = state[a]; if (!s) return null;
-      if ((s.mom.w + s.mom.l) < (CFG.PREDICT_MIN_SAMPLES || 25)) return null;
-      const be = (1 / 1.92) + (CFG.PREDICT_EDGE_MARGIN || 0.02);   // تعادل + هامش
-      const mom = _wr(s.mom), rev = _wr(s.rev);
-      if (mom >= be && mom >= rev) return 'momentum';
-      if (rev >= be && rev > mom) return 'reversion';
-      return 'off';   // لا حافة تتجاوز التعادل+الهامش → لا تتداول هذا الأصل
-    }
-    function report() {
-      Object.keys(state).forEach(a => {
-        const s = state[a];
-        addLog('🔭 [PREDICT-REPORT] ' + a + ' | زخم ' + _pct(s.mom) + ' | ارتداد ' + _pct(s.rev) +
-               ' | عينة ' + s.n + ' → موصى: ' + (recommendedMode(a) || 'إحماء'), 'info');
-      });
-    }
-    return { onTick, recommendedMode, report, _state: state };
-  })();
-  try { W._predictReport = () => PredictLab.report(); } catch (_) {}
 
   // ETC stubs
   const ETC_MAX_HIST     = 30;
@@ -1848,7 +1773,6 @@
     tickBuffers[a].push(price);
     if (tickBuffers[a].length > 600) tickBuffers[a].shift();
     try { OracleLab.onTick(a, price, labTs); } catch(_) {}   // [V16+V24] التقاط خام بتوقيت الخادم الدقيق
-    try { PredictLab.onTick(a, price, labTs); } catch(_) {}   // [TASK-1] مقياس قابلية التنبؤ لكل أصل
     try { if (a === activeAsset && typeof DualWSSManager !== 'undefined') { DualWSSManager.fastEval(a); DualWSSManager.tickPulse(a); } } catch(_) {}  // [V18] تقييم سريع + [V24] نبض التيكات
     totalTicks++;
     if (!activeAsset) onActiveAsset(a, 'firstTick');
@@ -4680,10 +4604,7 @@
       if (!CFG.CANDLE_LOCK_ENABLED) return false;
       const key = _getCandleKey(asset);
       if (!key) return false;
-      // ✅ [SCALP] اسمح بعدّة صفقات في الشمعة الواحدة (سكالبينغ 3ث على فريم 15ث).
-      //   القفل يُفعَّل فقط بعد بلوغ MAX_TRADES_PER_CANDLE في نفس الشمعة.
-      if (key !== _lastTradeCandleKey) return false;
-      return _candleTradeCount >= (CFG.MAX_TRADES_PER_CANDLE || 3);
+      return key === _lastTradeCandleKey;
     }
 
     // ─── التهدئة التكيفية — حسب مدة الشمعة ────────────────────────────
@@ -4867,14 +4788,7 @@
       if (!consistent) return;
 
       const strength = Math.abs(s.rel) / CFG.TICKPULSE_MIN_REL;    // ≥1
-      // ✅ [TASK-1] الوضع التلقائي: PredictLab يختار لكل أصل حسب الحافة المقيسة حياً.
-      //   أثناء الإحماء (عينة غير كافية) نرجع للارتداد المُثبَت. 'off' = لا حافة → تخطَّ.
-      let mode = CFG.TICKPULSE_MODE || 'momentum';
-      if (mode === 'auto') {
-        const rec = PredictLab.recommendedMode(a);
-        if (rec === 'off') return;
-        mode = rec || 'reversion';
-      }
+      const mode = CFG.TICKPULSE_MODE || 'momentum';
       let dir, conf, reversion = false;
 
       if (mode === 'reversion') {
@@ -5650,10 +5564,8 @@
         }, (tradeSec + 5) * 1000);
         // تهدهة تكيفية حسب مدة الشمعة
         _cooldownUntil = Date.now() + getAdaptiveCooldown();
-        // قفل الشمعة الحالية — عدّاد صفقات لكل شمعة (يسمح بعدّة صفقات سكالبينغ في نفس الشمعة)
-        const _ck = _getCandleKey(asset);
-        if (_ck === _lastTradeCandleKey) _candleTradeCount++;
-        else { _lastTradeCandleKey = _ck; _candleTradeCount = 1; }
+        // قفل الشمعة الحالية
+        _lastTradeCandleKey = _getCandleKey(asset);
         PERF.mark('orderSent');
         _tradeCount++;
         _pendingTradeRecord = { asset: asset || activeAsset, direction, amount: safeAmt, openTs: Date.now(), source: 'dualWSS' };

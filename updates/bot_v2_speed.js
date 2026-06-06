@@ -134,8 +134,7 @@
     RECALIBRATE_ON_STREAK   : 3,          // إعادة معايرة بعد N خسائر متتالية
     RECALIBRATE_DURATION_MS : 45000,      // مدة إعادة المعايرة القصوى (45 ثانية)
     RECALIBRATE_MIN_TREND_CANDLES : 3,    // عدد الشموع المتتالية المطلوبة لإنهاء إعادة المعايرة
-    CANDLE_LOCK_ENABLED     : true,        // منع الإفراط في التداول داخل الشمعة الواحدة
-    MAX_TRADES_PER_CANDLE   : 3,           // ✅ [SCALP] أقصى صفقات في الشمعة (3ث على فريم 15ث ≈ تتسع لعدة صفقات)
+    CANDLE_LOCK_ENABLED     : true,        // منع التداول في نفس الشمعة مرتين
     TRADE_COOLDOWN_RATIO    : 0.25,       // نسبة التهدئة من مدة الشمعة
     TRADE_COOLDOWN_FLOOR_MS : 500,        // الحد الأدنى للتهدئة
     LOSS_STREAK_PAUSE_MS    : 10000,      // وقف بعد خسائر متتالية (10ث بدل 45ث — لا نعطل 3 شموع)
@@ -212,23 +211,8 @@
     TICKPULSE_WIN_MS        : 2400,        // ✅ [FIX] التيك الحقيقي ~470ms → نافذة 900ms = تيكان فقط (ضجيج). 2400ms ≈ 5 تيكات
     TICKPULSE_MIN_TICKS     : 4,           // أدنى عدد تيكات في النافذة (الآن قابل للتحقق فعلياً ضمن 2400ms)
     TICKPULSE_MIN_REL       : 0.000060,   // أدنى عائد نسبي ليُعدّ اندفاعاً قوياً
-    TICKPULSE_COOLDOWN_MS   : 1500,        // ✅ [SPEED] 3000→1500: نبضات أكثر تكراراً
+    TICKPULSE_COOLDOWN_MS   : 3000,        // تهدئة بين نبضتين
     TICKPULSE_BASE_CONF     : 70,          // ثقة أساس النبض (تتدرّج مع القوة)
-    // ─── [REVERSION] وضع الارتداد لنبض التيك — مبني على إثبات الباكتيست ────────
-    //   الباكتيست على تيكاتك الحقيقية: الزخم/الاستمرار 46.6% (−10.5% EV)، أما
-    //   الارتداد (الدخول عكس الاندفاع) 53.4% (+2.5% EV)، والاندفاع الضعيف يرتد 63%.
-    //   لذا: ندخل عكس الاندفاع، نفضّل الضعيف/المتوسط، ونتخطّى القوي (تعادل 49%).
-    TICKPULSE_MODE          : 'reversion', // المُثبَت (تحبّه). بدائل: 'auto'=PredictLab يختار لكل أصل | 'momentum' | 'off'
-                                           //   ملاحظة: 'auto' سيُسكت الأصول التي قياسها ≈ تعادل (مثل AEDCNY على عيّنة كبيرة)
-    // ─── [TASK-1] PredictLab — مقياس قابلية التنبؤ لكل أصل ─────────────────
-    PREDICT_LAB_ENABLED     : true,        // قِس حياً: هل آخر Nms يتنبّأ بالـ3ث القادمة؟
-    PREDICT_HORIZON_MS      : 3000,        // أفق التقييم = مدة الصفقة (3ث)
-    PREDICT_MIN_SAMPLES     : 25,          // أدنى عينة قبل التوصية (قبلها: إحماء → ارتداد)
-    PREDICT_REPORT_EVERY    : 25,          // تقرير كل N تقييم
-    PREDICT_EDGE_MARGIN     : 0.0,         // فوق التعادل فقط (التعادل@92%=52.1%؛ الارتداد المقيس ~53% يجتازه)
-                                           //   ارفعه لو أردت تشدّداً أكثر (سيُسكت الأصول حافتها رقيقة)
-    TICKPULSE_REV_MAX_STRENGTH : 2.5,      // تخطَّ الاندفاع الأقوى من 2.5× (تعادل — لا حافة)
-    TICKPULSE_REV_CONF      : 88,          // ثقة ثابتة لإشارة الارتداد (تجتاز العتبات والاتجاه)
     // ─── [V24] أرضية ثقة صارمة + صفقتان حقيقيتان ──────────────────────────────
     ABSOLUTE_MIN_CONF       : 60,          // [V24] لا صفقة تحت 60% مهما كان السلايدر
     TWO_TRADES_ENABLED      : true,        // ✅ صفقتان حقيقيتان (أمران فعليان) عند التأكد
@@ -376,7 +360,6 @@
   let _recalibrating    = false;
   let _recalibrateUntil = 0;
   let _lastTradeCandleKey = null;
-  let _candleTradeCount   = 0;     // ✅ [SCALP] عدّاد صفقات الشمعة الحالية
   let _tradeExecTimeout  = null;       // مؤقت تحرير tradeExec التلقائي
   let _pendingRetrySignal = null;      // إشارة معلقة لإعادة المحاولة عند إعادة الاتصال
   let _lastTrendDirection = 'NEUTRAL';
@@ -537,71 +520,6 @@
   })();
   try { W._oracleLabReport = () => OracleLab.report(); } catch (_) {}
 
-  // ══════════════════════════════════════════════════════════════════════
-  // § PredictLab — مقياس قابلية التنبؤ لكل أصل  [TASK-1]
-  //   لكل أصل: عند كل تيك نحسب اتجاه الميل على نافذة النبض، ثم بعد أفق الصفقة
-  //   (PREDICT_HORIZON_MS) نقيس هل كان «الزخم» (اتباع الاندفاع) أم «الارتداد»
-  //   (عكسه) سيربح. نراكم النسبتين لكل أصل ونوصي بالوضع الأفضل إحصائياً.
-  //   هذا يجيب عملياً: «هل آخر Nms يتنبّأ بالـ3ث القادمة؟» — بلا جهاز ثانٍ،
-  //   لأن الفرق الكموني بين جهازين = نفس هذه المعلومة (ماضي السعر) لا أكثر.
-  // ══════════════════════════════════════════════════════════════════════
-  const PredictLab = (function () {
-    const state = {};   // asset -> { ticks:[{t,p}], pend:[{t,p,dir}], mom:{w,l}, rev:{w,l}, n }
-    function get(a) { return state[a] || (state[a] = { ticks: [], pend: [], mom: { w: 0, l: 0 }, rev: { w: 0, l: 0 }, n: 0 }); }
-    function _wr(o) { const t = o.w + o.l; return t ? o.w / t : 0; }
-    function _pct(o) { const t = o.w + o.l; return t ? Math.round(100 * o.w / t) + '%' : '—'; }
-
-    function onTick(a, price, t) {
-      if (!CFG.PREDICT_LAB_ENABLED) return;
-      const s = get(a);
-      s.ticks.push({ t, p: price });
-      if (s.ticks.length > 1000) s.ticks.shift();
-      const win = CFG.TICKPULSE_WIN_MS || 2400;
-      const minTicks = CFG.TICKPULSE_MIN_TICKS || 4;
-      const minRel = CFG.TICKPULSE_MIN_REL || 0.00006;
-      // اتجاه الاندفاع الحالي على نافذة النبض
-      let i = s.ticks.length - 1; while (i > 0 && s.ticks[i].t > t - win) i--;
-      const p0 = s.ticks[i].p, n = s.ticks.length - 1 - i;
-      let dir = 0;
-      if (p0 > 0 && n >= minTicks) { const rel = (price - p0) / p0; if (Math.abs(rel) >= minRel) dir = rel > 0 ? 1 : -1; }
-      if (dir !== 0) s.pend.push({ t, p: price, dir });
-      // تنضيج التقييمات التي بلغت الأفق
-      const H = CFG.PREDICT_HORIZON_MS || 3000;
-      while (s.pend.length && (t - s.pend[0].t) >= H) {
-        const e = s.pend.shift();
-        const move = price - e.p;
-        if (Math.abs(move) < 1e-12) continue;   // تعادل → تجاهل
-        if (move * e.dir > 0) s.mom.w++; else s.mom.l++;      // الزخم يراهن باتجاه الاندفاع
-        if (move * (-e.dir) > 0) s.rev.w++; else s.rev.l++;   // الارتداد يراهن عكسه
-        s.n++;
-        if (s.n % (CFG.PREDICT_REPORT_EVERY || 25) === 0) {
-          addLog('🔭 [PREDICT] ' + a + ' | زخم ' + _pct(s.mom) + ' | ارتداد ' + _pct(s.rev) +
-                 ' | عينة ' + s.n + ' → موصى: ' + (recommendedMode(a) || 'إحماء'), 'info');
-        }
-      }
-    }
-
-    // يرجع 'momentum' | 'reversion' | 'off' عند توفّر عينة كافية، وإلا null (إحماء)
-    function recommendedMode(a) {
-      const s = state[a]; if (!s) return null;
-      if ((s.mom.w + s.mom.l) < (CFG.PREDICT_MIN_SAMPLES || 25)) return null;
-      const be = (1 / 1.92) + (CFG.PREDICT_EDGE_MARGIN || 0.02);   // تعادل + هامش
-      const mom = _wr(s.mom), rev = _wr(s.rev);
-      if (mom >= be && mom >= rev) return 'momentum';
-      if (rev >= be && rev > mom) return 'reversion';
-      return 'off';   // لا حافة تتجاوز التعادل+الهامش → لا تتداول هذا الأصل
-    }
-    function report() {
-      Object.keys(state).forEach(a => {
-        const s = state[a];
-        addLog('🔭 [PREDICT-REPORT] ' + a + ' | زخم ' + _pct(s.mom) + ' | ارتداد ' + _pct(s.rev) +
-               ' | عينة ' + s.n + ' → موصى: ' + (recommendedMode(a) || 'إحماء'), 'info');
-      });
-    }
-    return { onTick, recommendedMode, report, _state: state };
-  })();
-  try { W._predictReport = () => PredictLab.report(); } catch (_) {}
-
   // ETC stubs
   const ETC_MAX_HIST     = 30;
   let _etcOffset         = 0;
@@ -703,19 +621,9 @@
   function getTopPatterns(n) { return []; }
   function recordPatternResult() {}
   function _savePatternStats() {}
-  function recordTrade(win, wasTVE, isTie) {
+  function recordTrade(win, wasTVE) {
     STATS.total++;
-    // ✅ [TIE] تعادل (profit=0): المنصة تُعيد الرهان — تعادل لا خسارة. لا نلمس السلاسل
-    //   ولا نُفعّل وقف الخسائر/الغوست (كان يُحسب −100 خطأً ويُبطّئ البوت).
-    if (isTie) {
-      if (_openTradesInFlight > 0) _openTradesInFlight--;
-      if (_openTradesInFlight === 0) _inFlightDirection = null;
-      STATS.ties = (STATS.ties || 0) + 1;
-      tradeExec = false;
-      if (_tradeExecTimeout) { clearTimeout(_tradeExecTimeout); _tradeExecTimeout = null; }
-      saveStats(); updateStatsUI(); updateTradeBtn();
-      return;
-    }
+    // ملاحظة: تسجيل أداء النمط الحي يتم داخل DualWSSManager.onTradeResult (حيث النمط في النطاق)
     if (win) {
       if (_openTradesInFlight > 0) _openTradesInFlight--;   // ✅ [FIX-C]
       if (_openTradesInFlight === 0) _inFlightDirection = null;
@@ -1724,7 +1632,6 @@
     const deal = data.deals[0];
     if (botOrderIds.size > 0 && !botOrderIds.has(deal.id)) { addLog('📊 صفقة منصة: '+(deal.profit>0?'+':'')+(deal.profit||0).toFixed(2)+'$','info'); return; }
     if (deal.id) botOrderIds.delete(deal.id);
-    const tie = (deal.profit === 0);        // ✅ [TIE] تعادل/استرداد — ليس خسارة
     const win = deal.profit > 0;
     let rawPayout = null;
     if (typeof deal.percentProfit === 'number' && deal.percentProfit >= 50 && deal.percentProfit <= 100) {
@@ -1737,11 +1644,10 @@
       if (deal.asset) _assetPayouts.set(normalizeAsset(deal.asset), rawPayout);
       if (win) addLog('📊 [PAYOUT] نسبة العائد: ' + Math.round(rawPayout * 100) + '%', 'info');
     }
-    recordTrade(win, _lastTradeWasTVE, tie);
-    try { if (!tie) OracleLab.recordClose(_pendingTradeRecord, win, _pendingTradeRecord && _pendingTradeRecord.openPrice, deal.closePrice || deal.price || 0); } catch(_) {}  // [V16] لا نُلوّث إحصاء المختبر بالتعادل
-    const sym = tie ? '➖' : (win ? '✅' : '❌');
-    const amount = tie ? '0$ (تعادل — استُرد الرهان)' : (win ? '+'+deal.profit?.toFixed(2)+'$' : '-'+deal.amount+'$');
-    addLog(sym+' '+amount, tie ? 'info' : (win?'signal':'error'));
+    recordTrade(win, _lastTradeWasTVE);
+    try { OracleLab.recordClose(_pendingTradeRecord, win, _pendingTradeRecord && _pendingTradeRecord.openPrice, deal.closePrice || deal.price || 0); } catch(_) {}  // [V16] ربط النتيجة بمصدر الأوراكل
+    const sym = win ? '✅' : '❌', amount = win ? '+'+deal.profit?.toFixed(2)+'$' : '-'+deal.amount+'$';
+    addLog(sym+' '+amount, win?'signal':'error');
     _lastTradeWasDouble = false; tradeExec = false; updateTradeBtn();
     // v12.11 [DB] Persist trade
     const _rec = _pendingTradeRecord || {};
@@ -1750,7 +1656,7 @@
       closeTs: Date.now(),
       orderId: _rec.orderId || deal.id,
       asset: _rec.asset || normalizeAsset(deal.asset || activeAsset || ''),
-      result: tie ? 'tie' : (win ? 'win' : 'loss'),
+      result: win ? 'win' : 'loss',
       profit: deal.profit ?? 0,
       amount: _rec.amount || deal.amount || 0,
     });
@@ -1848,7 +1754,6 @@
     tickBuffers[a].push(price);
     if (tickBuffers[a].length > 600) tickBuffers[a].shift();
     try { OracleLab.onTick(a, price, labTs); } catch(_) {}   // [V16+V24] التقاط خام بتوقيت الخادم الدقيق
-    try { PredictLab.onTick(a, price, labTs); } catch(_) {}   // [TASK-1] مقياس قابلية التنبؤ لكل أصل
     try { if (a === activeAsset && typeof DualWSSManager !== 'undefined') { DualWSSManager.fastEval(a); DualWSSManager.tickPulse(a); } } catch(_) {}  // [V18] تقييم سريع + [V24] نبض التيكات
     totalTicks++;
     if (!activeAsset) onActiveAsset(a, 'firstTick');
@@ -4680,10 +4585,7 @@
       if (!CFG.CANDLE_LOCK_ENABLED) return false;
       const key = _getCandleKey(asset);
       if (!key) return false;
-      // ✅ [SCALP] اسمح بعدّة صفقات في الشمعة الواحدة (سكالبينغ 3ث على فريم 15ث).
-      //   القفل يُفعَّل فقط بعد بلوغ MAX_TRADES_PER_CANDLE في نفس الشمعة.
-      if (key !== _lastTradeCandleKey) return false;
-      return _candleTradeCount >= (CFG.MAX_TRADES_PER_CANDLE || 3);
+      return key === _lastTradeCandleKey;
     }
 
     // ─── التهدئة التكيفية — حسب مدة الشمعة ────────────────────────────
@@ -4857,52 +4759,30 @@
       if (!buf || buf.length < 3) return;                          // نحتاج اتجاهاً
       const s = OracleLab.microSlope(a, CFG.TICKPULSE_WIN_MS);
       if (!s || s.ticks < CFG.TICKPULSE_MIN_TICKS || Math.abs(s.rel) < CFG.TICKPULSE_MIN_REL) return;
-      const burstDir = s.rel > 0 ? 'BUY' : 'SELL';   // اتجاه الاندفاع نفسه
-      // اتّساق: نافذتان أقصر توافقان اتجاه الاندفاع (اندفاع حقيقي لا ضجيج)
+      const dir = s.rel > 0 ? 'BUY' : 'SELL';
+      // اتّساق: نافذتان أقصر توافقان الاتجاه (الزخم يبني لا يرتد لحظياً)
       const s2 = OracleLab.microSlope(a, Math.round(CFG.TICKPULSE_WIN_MS / 2));
       const sShort = OracleLab.microSlope(a, 300);
       const consistent = s2 && sShort &&
-        ((burstDir === 'BUY'  && s2.rel >= 0 && sShort.rel >= 0) ||
-         (burstDir === 'SELL' && s2.rel <= 0 && sShort.rel <= 0));
+        ((dir === 'BUY'  && s2.rel >= 0 && sShort.rel >= 0) ||
+         (dir === 'SELL' && s2.rel <= 0 && sShort.rel <= 0));
       if (!consistent) return;
-
-      const strength = Math.abs(s.rel) / CFG.TICKPULSE_MIN_REL;    // ≥1
-      // ✅ [TASK-1] الوضع التلقائي: PredictLab يختار لكل أصل حسب الحافة المقيسة حياً.
-      //   أثناء الإحماء (عينة غير كافية) نرجع للارتداد المُثبَت. 'off' = لا حافة → تخطَّ.
-      let mode = CFG.TICKPULSE_MODE || 'momentum';
-      if (mode === 'auto') {
-        const rec = PredictLab.recommendedMode(a);
-        if (rec === 'off') return;
-        mode = rec || 'reversion';
-      }
-      let dir, conf, reversion = false;
-
-      if (mode === 'reversion') {
-        // ✅ [REVERSION] ادخل عكس الاندفاع. تخطَّ الاندفاع القوي (تعادل ~49%).
-        //   لا نطبّق حارس الاستنفاد هنا — تباطؤ الزخم *يؤكّد* الارتداد لا يمنعه.
-        if (strength >= (CFG.TICKPULSE_REV_MAX_STRENGTH || 2.5)) return;
-        dir = (burstDir === 'BUY') ? 'SELL' : 'BUY';
-        conf = CFG.TICKPULSE_REV_CONF || 88;
-        reversion = true;
-      } else if (mode === 'off') {
-        return;
-      } else {
-        // الوضع القديم (زخم/استمرار) — مع حارس الاستنفاد
-        dir = burstDir;
-        if (CFG.ETE_ACCEL_ENABLED) {
-          const ac = OracleLab.microAccel(a, CFG.ETE_ACCEL_MS);
-          const sign = (dir === 'BUY') ? 1 : -1;
-          if (ac && (ac.ticks || 0) >= CFG.ETE_ACCEL_MIN_TICKS && ac.accel * sign <= -CFG.ETE_ACCEL_DECEL_REL) return;
+      // [V25] لا تطلق نبضة على اندفاع يتباطأ (استنفاد): اشترط ألا تعاكس العجلة الاتجاه بقوة.
+      //   هذا يحجب اندفاعات «الاتجاه صحيح لكن انتهى» التي كانت تدخل عند القمة/القاع وتخسر خلال 3ث.
+      if (CFG.ETE_ACCEL_ENABLED) {
+        const ac = OracleLab.microAccel(a, CFG.ETE_ACCEL_MS);
+        const sign = (dir === 'BUY') ? 1 : -1;
+        if (ac && (ac.ticks || 0) >= CFG.ETE_ACCEL_MIN_TICKS && ac.accel * sign <= -CFG.ETE_ACCEL_DECEL_REL) {
+          return;   // الزخم يتباطأ عكس الاتجاه → تجاهل النبضة
         }
-        conf = Math.max(CFG.TICKPULSE_BASE_CONF, Math.min(90, Math.round(CFG.TICKPULSE_BASE_CONF + (strength - 1) * 8)));
       }
-
+      const strength = Math.abs(s.rel) / CFG.TICKPULSE_MIN_REL;    // ≥1
+      const conf = Math.max(CFG.TICKPULSE_BASE_CONF, Math.min(90, Math.round(CFG.TICKPULSE_BASE_CONF + (strength - 1) * 8)));
       const tb = tickBuffers[a];
       const price = (tb && tb.length) ? tb[tb.length - 1] : 0;
-      addLog('⚡ [TICKPULSE] ' + (reversion ? 'ارتداد ضد اندفاع ' + burstDir + ' → ' + dir : 'اندفاع ' + dir) +
-             ' | ميل ' + (s.rel * 1e6).toFixed(1) + 'e-6 (' + s.ticks + ' تيك/' + CFG.TICKPULSE_WIN_MS + 'ms) | ثقة ' + conf + '%', 'signal');
+      addLog('⚡ [TICKPULSE] اندفاع ' + dir + ' | ميل ' + (s.rel * 1e6).toFixed(1) + 'e-6 (' + s.ticks + ' تيك/' + CFG.TICKPULSE_WIN_MS + 'ms) | ثقة ' + conf + '%', 'signal');
       _pulseCooldownUntil = now + CFG.TICKPULSE_COOLDOWN_MS;
-      _processSignal({ direction: dir, asset: a, price, confidence: conf, pattern: 'tick_pulse', timestamp: now, reversion });
+      _processSignal({ direction: dir, asset: a, price, confidence: conf, pattern: 'tick_pulse', timestamp: now });
     }
 
     // ─── كشف إشارة عند إغلاق شمعة ─────────────────────────────────────
@@ -4961,9 +4841,7 @@
 
       // ✅ [V13.4] ثقة تكيفية — ارفع عتبة القبول للأنماط الخاسرة حياً، وعطّل الضعيف جداً
       const _adapt = _adaptiveConfGate(signal.pattern);
-      // ✅ [REVERSION] إشارة الارتداد تستخدم الأرضية الصارمة فقط (لها منطقها الخاص)
-      const _effThreshold = signal.reversion ? CFG.ABSOLUTE_MIN_CONF
-                          : Math.max(_minConfThreshold + _adapt.bump, CFG.ABSOLUTE_MIN_CONF);  // [V24] أرضية صارمة 60%
+      const _effThreshold = Math.max(_minConfThreshold + _adapt.bump, CFG.ABSOLUTE_MIN_CONF);  // [V24] أرضية صارمة 60%
       if (_adapt.disabled) {
         const _k = signal.pattern, _nowOff = Date.now();   // [V25] خنق التكرار: مرة كل 15ث للنمط
         if (!_patternOffLog[_k] || _nowOff - _patternOffLog[_k] > 15000) {
@@ -4976,7 +4854,7 @@
       // ✅ [V13.6] فلتر الاتجاه — 'hard'=حظر | 'soft'=خصم ثقة
       let _effConf = signal.confidence;
       let _counterTrend = false;
-      if (!signal.reversion && !_trendAllows(signal.direction)) {   // ✅ [REVERSION] لا فلتر اتجاه للارتداد
+      if (!_trendAllows(signal.direction)) {
         if (CFG.TREND_FILTER_MODE === 'hard') {
           addLog('🚫 [TREND-BLOCK] ' + signal.direction + ' ممنوع — الاتجاه: ' + _lastTrendDirection, 'info');
           return;
@@ -5006,7 +4884,7 @@
       // ═══ [DISCIPLINE] انضباط 17/5: المحرّكات الزائدة (نبض التيك/الاستمرار) تتطلّب
       //   تأكيد أوراكل صريحاً — لا تتداول على زخم وحده (مصدر خسائر V2). أنماط الشموع
       //   المؤكَّدة تبقى كما هي (نواة 17/5 الرابحة).
-      if (CFG.DISCIPLINE_ORACLE_FOR_ENGINES !== false && !signal.reversion &&   // ✅ [REVERSION] معفاة من شرط الأوراكل
+      if (CFG.DISCIPLINE_ORACLE_FOR_ENGINES !== false &&
           (signal.pattern === 'tick_pulse' || signal.pattern === 'momentum_continuation') &&
           !_oracleConfirmed) {
         addLog('🧭 [DISCIPLINE] ' + signal.pattern + ' مرفوض — يتطلّب تأكيد أوراكل صريح (انضباط 17/5)', 'info');
@@ -5136,13 +5014,7 @@
       if (!CFG.PATTERN_REARM_ENABLED) return false;
       const key = signal.pattern + ':' + signal.asset;
       const now = Date.now();
-      // ✅ [SPEED] tick_pulse محرّك تيكات مستمر — لا يخضع لحاجز الشمعة (كان 30ث على فريم 15ث!).
-      //   يكتفي بتهدئته الذاتية القصيرة (TICKPULSE_COOLDOWN_MS) → صفقات أكثر بكثير.
-      if (signal.pattern === 'tick_pulse') {
-        if (_lastExecutedPattern === key && (now - _lastExecutedPatternTs) < (CFG.TICKPULSE_COOLDOWN_MS || 1500)) return true;
-        return false;
-      }
-      // نافذة إعادة التسليح: الأكبر من (2× مدة الشمعة) أو (الحد الأدنى)
+      // نافذة إعادة التسليح: الأكبر من (2× مدة الشمعة) أو (الحد الأدنى 15 ثانية)
       const frameBased = (candlePeriod > 0 ? candlePeriod : 15) * 1000 * 2;
       const rearmWindow = Math.max(CFG.PATTERN_REARM_MIN_MS, frameBased);
       if (_lastExecutedPattern === key && (now - _lastExecutedPatternTs) < rearmWindow) {
@@ -5438,7 +5310,7 @@
 
       // ✅ [FIX-E] حارس جراحي: ارفض تقاطع (معاكس للاتجاه + ثقة حدّية + زخم آني رقيق n1/n2)
       //   هذا التقاطع بالضبط هو ملف الخسائر الأربع في السجل. الإشارات القوية لا تتأثر.
-      if (CFG.FIXE_ENABLED && !signal.reversion) {   // ✅ [REVERSION] معفاة من حارس الزخم الرقيق/المعاكس
+      if (CFG.FIXE_ENABLED) {
         const _ctE = !_trendAllows(signal.direction) && _lastTrendDirection !== 'NEUTRAL';
         const _slE = OracleLab.microSlope(normalizeAsset(signal.asset), CFG.FIXE_THIN_SLOPE_MS);
         const _thinE = !_slE || (_slE.ticks || 0) <= CFG.FIXE_THIN_TICKS;
@@ -5484,8 +5356,7 @@
       const _execAmount = tradeAmount;
       let _tradeCount = 1;
       // ✅ [FIX-F] لا تضاعف بعد خسائر متتالية — خسارة ×2 تضاعف النزيف
-      //   ✅ [REVERSION] ولا نضاعف صفقات الارتداد (حافتها رقيقة — حماية على بيانات قليلة)
-      const _allowDoubleF = !signal.reversion && (STATS.lossStreak || 0) < (CFG.FIXF_NO_DOUBLE_AFTER_LOSSES || 2);
+      const _allowDoubleF = (STATS.lossStreak || 0) < (CFG.FIXF_NO_DOUBLE_AFTER_LOSSES || 2);
       if (!_allowDoubleF && CFG.TWO_TRADES_ENABLED && (signal.confidence || 0) >= CFG.TWO_TRADES_MIN_CONF) {
         addLog('🛡️ [FIX-F] لا مضاعفة — ' + STATS.lossStreak + ' خسائر متتالية → صفقة واحدة فقط', 'info');
       }
@@ -5506,10 +5377,10 @@
         if (_queueTimer) clearTimeout(_queueTimer);
         _queueTimer = setTimeout(() => {
           _queueTimer = null;
-          _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount, signal.reversion);
+          _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount);
         }, totalDelay);
       } else {
-        _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount, signal.reversion);
+        _timedExecute(signal.direction, signal.asset, _execAmount, _tradeCount);
       }
     }
 
@@ -5557,9 +5428,7 @@
       const ms = Math.round(durSec * 1000 * CFG.ETE_WAIT_FRAC);
       return Math.max(CFG.ETE_WAIT_MIN_MS, Math.min(CFG.ETE_WAIT_MAX_MS, ms));
     }
-    function _timedExecute(direction, asset, amount, count, isReversion) {
-      // ✅ [REVERSION] دخول فوري عند الطرف — لا ننتظر محاذاة الزخم (الارتداد يدخل ضد الميل عمداً)
-      if (isReversion) { _executeDualTrade(direction, asset, amount, count); return; }
+    function _timedExecute(direction, asset, amount, count) {
       if (!CFG.ENTRY_TIMING_ENABLED) { _executeDualTrade(direction, asset, amount, count); return; }
       if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
       const maxWait = _eteMaxWait();
@@ -5650,10 +5519,8 @@
         }, (tradeSec + 5) * 1000);
         // تهدهة تكيفية حسب مدة الشمعة
         _cooldownUntil = Date.now() + getAdaptiveCooldown();
-        // قفل الشمعة الحالية — عدّاد صفقات لكل شمعة (يسمح بعدّة صفقات سكالبينغ في نفس الشمعة)
-        const _ck = _getCandleKey(asset);
-        if (_ck === _lastTradeCandleKey) _candleTradeCount++;
-        else { _lastTradeCandleKey = _ck; _candleTradeCount = 1; }
+        // قفل الشمعة الحالية
+        _lastTradeCandleKey = _getCandleKey(asset);
         PERF.mark('orderSent');
         _tradeCount++;
         _pendingTradeRecord = { asset: asset || activeAsset, direction, amount: safeAmt, openTs: Date.now(), source: 'dualWSS' };
