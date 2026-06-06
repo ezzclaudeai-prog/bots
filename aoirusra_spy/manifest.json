@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "AOIRUSRA Data Spy",
+  "version": "2.0.0",
+  "description": "استخراج البيانات الخام من Pocket Option — socket.io WSS (JSON) + DOM + الصفقات + microstructure + بث NDJSON منظم",
+  "permissions": [
+    "scripting",
+    "activeTab",
+    "storage",
+    "tabs",
+    "downloads"
+  ],
+  "host_permissions": [
+    "*://*.pocketoption.com/*",
+    "*://*.po.market/*",
+    "*://*.pocketoption.org/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AOIRUSRA Data Spy",
+    "default_icon": { "48": "icon.png", "128": "icon.png" }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.pocketoption.com/*",
+        "*://*.po.market/*",
+        "*://*.pocketoption.org/*"
+      ],
+      "js": ["spy_injected.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "*://*.pocketoption.com/*",
+        "*://*.po.market/*",
+        "*://*.pocketoption.org/*"
+      ],
+      "js": ["spy_content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icon.png", "spy_injected.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "icons": { "48": "icon.png", "128": "icon.png" }
+}
