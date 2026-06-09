@@ -217,8 +217,8 @@
     // ─── [V24] محرك نبض التيكات (TickPulse) — رصد الفرص بالملي‑ثانية ──────────
     TICKPULSE_ENABLED       : true,        // ✅ يكتشف اندفاعات الزخم لحظياً من التيكات الخام
     TICKPULSE_MS            : 100,         // ✅ [V14] 250→100: فحص أبكر — كل 100ms
-    TICKPULSE_WIN_MS        : 1500,        // ✅ [V14] 2400→1500: نافذة أقصر = استجابة أسرع
-    TICKPULSE_MIN_TICKS     : 3,           // ✅ [V14] 4→3: كشف أبكر
+    TICKPULSE_WIN_MS        : 3500,        // ✅ [V26] 1500→3500: نافذة أوسع تتسع لـ6-7 تيكات (لا قرار على تيك/تيكين)
+    TICKPULSE_MIN_TICKS     : 6,           // ✅ [V26] 3→6: لا دخول إلا على زخم مؤكَّد بعدّة تيكات
     TICKPULSE_MIN_REL       : 0.000030,   // ✅ [V14] 60e-6→30e-6: أكثر حساسية
     TICKPULSE_COOLDOWN_MS   : 1000,        // ✅ [V14] 3000→1000: لا تنتظر 3 ثواني
     TICKPULSE_BASE_CONF     : 80,          // ✅ [V14] 70→80: نبضة حقيقية = ثقة عالية
@@ -279,10 +279,17 @@
     FC_MIN_TICKS            : 6,           // أدنى عدد تيكات قبل الوثوق بالحساب
     FC_PAYOUT               : 0.92,        // نسبة عائد الخيار الرابح (لحساب EV ونقطة التعادل)
     FC_EDGE_BUFFER_REL      : 0.000005,   // هامش انزلاق/سبريد نصفي (عائد لوغاريتمي)
-    FC_EV_MIN               : 0.0,         // أدنى EV للسماح بالدخول (0=عادل، >0=أكثر تحفّظاً)
-    FC_PWIN_MIN             : 0.52,        // أدنى احتمال فوز (نقطة التعادل ≈ 1/(1+payout))
+    FC_EV_MIN               : 0.05,        // ✅ [V26] أدنى EV موجب للدخول (تحفّظ — لا صفقات حدّية)
+    FC_PWIN_MIN             : 0.60,        // ✅ [V26] 0.52→0.60: لا دخول إلا باحتمال فوز عالٍ (متأكد)
+    FC_MIN_TSTAT            : 1.5,         // ✅ [V26] الانجراف يجب أن يكون معنوياً إحصائياً (t≥1.5) لا ضجيج
     FC_HORIZONS             : [10,15,20,30,45,60],  // مدد المنصة المرشّحة لاختيار الأفضل
     FC_HEALTH_DANGER        : 0.40,        // pWin أقل من هذا أثناء الصفقة = تحذير خطر
+    // ─── [V26] إجماع التيكات الصارم — لا دخول إلا على إشارة قوية بنفس الاتجاه ──────
+    FC_STRICT_ENABLED       : true,        // ✅ اشترط إجماع تيكات قوي بنفس الاتجاه قبل أي دخول
+    FC_CONSENSUS_TICKS      : 8,           // نافذة عدّ الإجماع (آخر 8 خطوات تيك)
+    FC_MIN_SAME_DIR_TICKS   : 5,           // أدنى عدد تيكات متحرّكة فعلاً في اتجاه الإشارة (لا تيك/تيكين)
+    FC_MIN_AGREE_RATIO      : 0.75,        // ≥75% من خطوات التيك غير المسطّحة بنفس الاتجاه
+    FC_MIN_RUN              : 4,           // أدنى تتابع حديث في الاتجاه (يمنع الدخول على أول/ثاني تيك)
 
     // ─── Socket Stability ──────────────────────────────────────────────
     WS_SELF_PING_ENABLED    : false,       // ✅ إيقاف PING الخاص — المنصة تدير PING/PONG بنفسها
@@ -610,7 +617,35 @@
       if (Math.sign(driftMed) === Math.sign(driftMean)) {
         drift = Math.abs(driftMean) < Math.abs(driftMed) ? driftMean : driftMed;
       } else { drift = 0; }
-      return { cadence, drift, sigma, n: rets.length, lastPrice: b[b.length - 1].p, lastTs: b[b.length - 1].t };
+      // t-stat للانجراف: drift / (sigma/√n) — معنوية إحصائية للاتجاه (هل هو حقيقي أم ضجيج؟)
+      const tstat = (sigma > 0) ? (drift / (sigma / Math.sqrt(rets.length))) : 0;
+      return { cadence, drift, sigma, tstat, n: rets.length, lastPrice: b[b.length - 1].p, lastTs: b[b.length - 1].t };
+    }
+    // إجماع الاتجاه على آخر lookback تيك: كم تيك تحرّك في اتجاه dir، نسبة الإجماع،
+    //   وأطول تتابع حديث (run). يمنع الدخول على «أول/ثاني تيك» أو على ضجيج مختلط.
+    function consensus(a, dir, lookback) {
+      const b = buf[a]; if (!b || b.length < 2) return null;
+      const L = Math.min(b.length - 1, lookback || 8);
+      const start = b.length - 1 - L;
+      let up = 0, down = 0, flat = 0;
+      for (let i = start + 1; i < b.length; i++) {
+        const d = b[i].p - b[i - 1].p;
+        if (d > 0) up++; else if (d < 0) down++; else flat++;
+      }
+      const nz = up + down;
+      const inDir = dir === 'BUY' ? up : down;
+      const against = dir === 'BUY' ? down : up;
+      const ratio = nz > 0 ? inDir / nz : 0;
+      // run: من النهاية للخلف، عُدّ الخطوات غير المعاكسة (في الاتجاه أو مسطّحة)
+      //   وأحصِ المؤكَّدة منها (المتحرّكة فعلاً في الاتجاه) → run في الاتجاه.
+      let run = 0, runInDir = 0;
+      for (let i = b.length - 1; i > 0; i--) {
+        const d = b[i].p - b[i - 1].p;
+        if ((dir === 'BUY' && d < 0) || (dir === 'SELL' && d > 0)) break;   // خطوة معاكسة → توقّف
+        run++;
+        if ((dir === 'BUY' && d > 0) || (dir === 'SELL' && d < 0)) runInDir++;
+      }
+      return { steps: up + down + flat, up, down, flat, nz, inDir, against, ratio, run, runInDir };
     }
     // الانحراف التنبّؤي على N تيك: يجمع تذبذب الانتشار (diffusion) مع عدم يقين
     //   تقدير الانجراف نفسه (الخطأ المعياري = sigma/√n). بدونه يظنّ البوت أن انجراف
@@ -666,11 +701,15 @@
       if (!bh) return { ok: false, reason: 'no_horizon' };
       const evMin = (CFG.FC_EV_MIN != null ? CFG.FC_EV_MIN : 0);
       const pMin = (CFG.FC_PWIN_MIN != null ? CFG.FC_PWIN_MIN : (1 / (1 + (CFG.FC_PAYOUT || 0.92))));
-      const ok = (bh.pWin >= pMin) && (bh.ev >= evMin);
+      const tMin = (CFG.FC_MIN_TSTAT != null ? CFG.FC_MIN_TSTAT : 0);
+      // لا دخول إلا إذا اتفق اتجاه الطلب مع اتجاه الانجراف، والانجراف معنوي إحصائياً (t-stat)
+      const dirAgrees = driftDir ? (dir === driftDir) : false;
+      const okStat = (Math.abs(s.tstat) >= tMin) && (tMin <= 0 || dirAgrees);
+      const ok = (bh.pWin >= pMin) && (bh.ev >= evMin) && okStat;
       return {
         ok, dir, durSec: bh.sec, pWin: bh.pWin, ev: bh.ev, z: bh.z,
-        drift: s.drift, sigma: s.sigma, cadence: s.cadence,
-        agreeDrift: driftDir ? (dir === driftDir) : false, pMin, evMin,
+        drift: s.drift, sigma: s.sigma, cadence: s.cadence, tstat: s.tstat, nSample: s.n,
+        agreeDrift: dirAgrees, pMin, evMin, tMin,
       };
     }
     // مراقب صحة الصفقة المفتوحة: يعيد حساب pWin من السعر الحالي نسبةً لسعر الفتح
@@ -686,7 +725,7 @@
       const z = (cushion + mu) / sd;          // احتمال الانتهاء في جهة الربح عند الإغلاق
       return { pWin: _normCdf(z), cushion, remMs, itm: cushion > 0, nTicks: N };
     }
-    return { onTick, stats, project, winProb, ev, bestHorizon, decide, health, _normCdf };
+    return { onTick, stats, project, winProb, ev, bestHorizon, decide, consensus, health, _normCdf };
   })();
   try { W._tickForecast = TickForecast; } catch (_) {}
 
@@ -5551,18 +5590,37 @@
       _pulseCooldownUntil = now + CFG.TICKPULSE_COOLDOWN_MS;
       addLog('⚡ [PULSE] اندفاع ' + dir + ' | ميل ' + (s.rel * 1e6).toFixed(1) + 'e-6 (' + s.ticks + ' تيك/' + CFG.TICKPULSE_WIN_MS + 'ms) | ثقة ' + conf + '%', 'signal');
 
-      // ═══ [V26] بوابة الإسقاط الأمامي — عملية حسابية دقيقة قبل الدخول ═══
-      //   نحسب pWin/EV/أفضل مدة من التيكات الخام؛ نرفض الدخول السالب القيمة إحصائياً.
+      // ═══ [V26] بوابة الإسقاط الأمامي + إجماع التيكات الصارم — لا دخول إلا على إشارة قوية ═══
+      //   شرط الدخول: تيكات كثيرة بنفس الاتجاه (لا تيك/تيكين) + إجماع ≥75% + تتابع حديث
+      //   + احتمال فوز عالٍ + انجراف معنوي إحصائياً (t-stat). غير ذلك → لا يدخل أبداً.
       let _fcDur = 0;
       if (CFG.FC_ENABLED) {
         const _fc = TickForecast.decide(a, dir);
+        const _cs = CFG.FC_STRICT_ENABLED ? TickForecast.consensus(a, dir, CFG.FC_CONSENSUS_TICKS) : null;
+
+        // ① فحص الإجماع الصارم على التيكات
+        let _strictOk = true, _why = '';
+        if (CFG.FC_STRICT_ENABLED) {
+          if (!_cs) { _strictOk = false; _why = 'لا توجد تيكات كافية للإجماع'; }
+          else if (_cs.inDir < (CFG.FC_MIN_SAME_DIR_TICKS || 5)) {
+            _strictOk = false; _why = 'تيكات الاتجاه ' + _cs.inDir + ' < ' + (CFG.FC_MIN_SAME_DIR_TICKS || 5) + ' (إشارة ضعيفة)';
+          } else if (_cs.ratio < (CFG.FC_MIN_AGREE_RATIO || 0.75)) {
+            _strictOk = false; _why = 'إجماع ' + Math.round(_cs.ratio * 100) + '% < ' + Math.round((CFG.FC_MIN_AGREE_RATIO || 0.75) * 100) + '% (اتجاه مختلط)';
+          } else if (_cs.runInDir < (CFG.FC_MIN_RUN || 4)) {
+            _strictOk = false; _why = 'تتابع ' + _cs.runInDir + ' < ' + (CFG.FC_MIN_RUN || 4) + ' (دخول على أول/ثاني تيك)';
+          }
+        }
+
+        // ② فحص الإسقاط الاحتمالي (pWin/EV/t-stat)
         if (_fc && _fc.pWin != null) {
+          const _csStr = _cs ? (' | إجماع ' + _cs.inDir + '/' + _cs.nz + ' تتابع ' + _cs.runInDir) : '';
           addLog('🔮 [FORECAST] ' + dir + ' | pWin ' + Math.round(_fc.pWin * 100) + '% | EV ' + (_fc.ev >= 0 ? '+' : '') + _fc.ev.toFixed(2) +
-                 ' | أفضل مدة ' + _fc.durSec + 'ث | انجراف ' + (_fc.drift * 1e6).toFixed(1) + 'e-6 σ' + (_fc.sigma * 1e6).toFixed(1) +
-                 'e-6 | تيك~' + Math.round(_fc.cadence) + 'ms', _fc.ok ? 'signal' : 'info');
-          if (CFG.FC_GATE_ENABLED && CFG.FC_GATE_BLOCK && !_fc.ok) {
-            addLog('🛑 [FORECAST-GATE] ' + dir + ' مرفوض — pWin ' + Math.round(_fc.pWin * 100) + '% < ' +
-                   Math.round(_fc.pMin * 100) + '% أو EV سالب (لا حافة إحصائية)', 'info');
+                 ' | t=' + (_fc.tstat || 0).toFixed(2) + ' | أفضل مدة ' + _fc.durSec + 'ث | تيك~' + Math.round(_fc.cadence) + 'ms' + _csStr,
+                 (_fc.ok && _strictOk) ? 'signal' : 'info');
+          if (CFG.FC_GATE_ENABLED && CFG.FC_GATE_BLOCK && (!_fc.ok || !_strictOk)) {
+            const _reason = !_strictOk ? _why
+              : ('pWin ' + Math.round(_fc.pWin * 100) + '% / EV ' + _fc.ev.toFixed(2) + ' / t=' + (_fc.tstat || 0).toFixed(2) + ' بلا حافة مؤكّدة');
+            addLog('🛑 [FORECAST-GATE] ' + dir + ' مرفوض — ' + _reason, 'info');
             return;
           }
           if (CFG.FC_DURATION_ENABLED && _fc.durSec) _fcDur = _fc.durSec;

@@ -39,10 +39,23 @@
 فالبوابة سترفض أغلب الإشارات وتتداول **أقل بكثير** — وهذا هو المقصود: لا صفقات على
 رمي العملة. الحافة الحقيقية تظهر حين يوجد انجراف معنوي (t‑stat واضح) أو على فريمات أطول.
 
+### الدخول الصارم (V26.1) — «لا يدخل إلا على إشارة قوية»
+البوت لا يفتح أي صفقة إلا إذا تحقّقت **كل** الشروط (وإلا لا يدخل أبداً):
+- **تيكات كثيرة بنفس الاتجاه** (`FC_MIN_SAME_DIR_TICKS=5` من آخر 8) — لا قرار على تيك/تيكين.
+- **إجماع ≥75%** من خطوات التيك غير المسطّحة بنفس الاتجاه (`FC_MIN_AGREE_RATIO`).
+- **تتابع حديث ≥4** تيكات في الاتجاه (`FC_MIN_RUN`) — يمنع الدخول على أول/ثاني تيك.
+- **احتمال فوز ≥60%** و **EV ≥ 0.05** (`FC_PWIN_MIN`, `FC_EV_MIN`).
+- **انجراف معنوي إحصائياً** `|t-stat| ≥ 1.5` (`FC_MIN_TSTAT`) — لا دخول على ضجيج.
+- نافذة النبض وُسِّعت إلى 3500ms و`TICKPULSE_MIN_TICKS=6` لتتسع لعدّة تيكات.
+
+على بياناتك الحقيقية خفّض الدخولات **97–100%**، والمقبول منها pWin 94–99% وإجماع 5/6–7/7.
+
 ### الإعدادات (CFG، بادئة `FC_`)
 `FC_ENABLED, FC_GATE_ENABLED, FC_GATE_BLOCK, FC_DURATION_ENABLED, FC_HEALTH_ENABLED,
 FC_WINDOW_MS, FC_MIN_TICKS, FC_PAYOUT, FC_EDGE_BUFFER_REL, FC_EV_MIN, FC_PWIN_MIN,
-FC_HORIZONS, FC_HEALTH_DANGER`. للوضع الاستشاري فقط (بلا حجب): اجعل `FC_GATE_BLOCK=false`.
+FC_MIN_TSTAT, FC_HORIZONS, FC_HEALTH_DANGER, FC_STRICT_ENABLED, FC_CONSENSUS_TICKS,
+FC_MIN_SAME_DIR_TICKS, FC_MIN_AGREE_RATIO, FC_MIN_RUN`.
+للوضع الاستشاري فقط (بلا حجب): `FC_GATE_BLOCK=false`. لتخفيف الصرامة: `FC_STRICT_ENABLED=false`.
 
 ### إصلاح إضافي
 كشف الفريم الديناميكي: `candlePeriod` كان يُلتقط مرة واحدة فقط؛ الآن يتحدّث عند تغيّر
