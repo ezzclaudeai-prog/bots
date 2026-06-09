@@ -233,6 +233,50 @@ def report(path):
             print(f"      فريم {period:>2}ث: عينة غير كافية (n={n})")
     print("     (≈50% = لا حافة. انحراف واضح ومتسق عبر الأصول = مصدر يستحق الاختبار.)")
 
+    # (3c) فلتر حالة السوق (REGIME): الزخم في سوق متجه مقابل سوق هادئ.
+    # هذه الحافة الوحيدة المرشّحة — نقسم إشارات الزخم حسب |ميل النافذة الأطول|.
+    print("\n[3c] حالة السوق (REGIME): الزخم مشروطاً بحركة النافذة الأطول 10ث:")
+    reg = {"trend_agree": [0, 0], "trend_against": [0, 0], "quiet": [0, 0]}
+    REG_WIN, REG_MIN, HOR = 10.0, 0.0002, 10
+    for a, arr in ticks.items():
+        if len(arr) < 120:
+            continue
+        keys = [x[0] for x in arr]
+        lastfire = 0
+        for j in range(20, len(arr)):
+            t, p = arr[j]
+            if t - lastfire < 1.0:
+                continue
+            s, n = slope(arr, j, 1500)
+            if s is None or n < 3 or abs(s) < 30e-6:
+                continue
+            s2, _ = slope(arr, j, 750)
+            s3, _ = slope(arr, j, 300)
+            if s2 is None or s3 is None:
+                continue
+            up = s > 0
+            if not ((up and s2 >= 0 and s3 >= 0) or (not up and s2 <= 0 and s3 <= 0)):
+                continue
+            lastfire = t
+            r, _ = slope(arr, j, REG_WIN * 1000)
+            fp = price_at(arr, keys, t + HOR)
+            if fp is None or fp == p or r is None:
+                continue
+            win = (fp > p) == up
+            if abs(r) < REG_MIN:
+                bucket = "quiet"
+            elif (up and r > 0) or (not up and r < 0):
+                bucket = "trend_agree"
+            else:
+                bucket = "trend_against"
+            reg[bucket][0 if win else 1] += 1
+    labels = {"trend_agree": "سوق متجه يوافق", "trend_against": "سوق متجه يعاكس", "quiet": "سوق هادئ"}
+    for k in ("trend_agree", "trend_against", "quiet"):
+        w, l = reg[k]
+        if w + l:
+            print(f"      {labels[k]:<16}: W{w} L{l}  →  WR {100*w/(w+l):.1f}%  (n={w+l})")
+    print("     (إن بقي «المتجه يوافق» فوق نقطة التعادل عبر جلسات = فلتر REGIME يستحق التفعيل.)")
+
     # (4)+(5) الصفقات الفعلية + حافة المدة
     cmap = {d["id"]: d for d in deals if "id" in d}
     durbk = {d: [0, 0, 0] for d in [3, 5, 7, 10, 15, 20, 30]}

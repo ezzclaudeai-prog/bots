@@ -226,6 +226,14 @@
     TICKPULSE_MIN_REL       : 0.000030,   // ✅ [V14] 60e-6→30e-6: أكثر حساسية
     TICKPULSE_COOLDOWN_MS   : 1000,        // ✅ [V14] 3000→1000: لا تنتظر 3 ثواني
     TICKPULSE_BASE_CONF     : 80,          // ✅ [V14] 70→80: نبضة حقيقية = ثقة عالية
+    // ─── [REGIME] فلتر حالة السوق — الحافة الوحيدة المثبتة بالبيانات ───────────
+    //   نتيجة التحليل: زخم في سوق هادئ ≈41% (خاسر) | في سوق متجه ≈59% (مربح).
+    //   لا نُطلق نبضة إلا حين يؤكّد ميل النافذة الأطول وجود اتجاه حقيقي موافق.
+    //   ⚠️ تجريبي (n=51 داخل الجلسة) — يحتاج تحقّقاً على جلسات أخرى عبر edge_analyzer.
+    REGIME_FILTER_ENABLED   : true,        // ✅ تفعيل فلتر حالة السوق
+    REGIME_WINDOW_MS        : 10000,       // نافذة قياس الاتجاه الأكبر (10ث)
+    REGIME_MIN_REL          : 0.0002,      // أدنى ميل نسبي لاعتبار السوق «متجهاً» (200e-6)
+    REGIME_REQUIRE_AGREE    : true,        // يجب أن يوافق الاتجاه الأكبر اتجاه النبضة
     // ─── [V24] أرضية ثقة صارمة + صفقتان حقيقيتان ──────────────────────────────
     ABSOLUTE_MIN_CONF       : 60,          // [V24] لا صفقة تحت 60% مهما كان السلايدر
     TWO_TRADES_ENABLED      : true,        // ✅ صفقتان حقيقيتان (أمران فعليان) عند التأكد
@@ -339,6 +347,7 @@
   let lastTradeMs     = 0;
   let _lastTickMs     = 0;
   let _lastChaforMs   = 0;       // ✅ [DIAG] آخر وصول لحدث chafor (تشخيص محرك الشموع)
+  let _lastRegimeLogMs = 0;      // ✅ [REGIME] خنق سجل فلتر حالة السوق
   let _streamStalled  = false;
   let _wsReconnectTs  = 0;
   let tradeWS         = null;
@@ -5535,6 +5544,26 @@
         ((dir === 'BUY'  && s2.rel >= 0 && sShort.rel >= 0) ||
          (dir === 'SELL' && s2.rel <= 0 && sShort.rel <= 0));
       if (!consistent) return;
+
+      // ═══ [REGIME] فلتر حالة السوق — الحافة الوحيدة المثبتة في البيانات ═══
+      //   التحليل: الزخم في سوق هادئ ≈41% فوز (خاسر)، وفي سوق متجه ≈59% (مربح).
+      //   لذا لا نُطلق إلا حين يؤكّد ميل النافذة الأطول (REGIME_WINDOW_MS) وجود
+      //   اتجاه حقيقي (|ميل| ≥ REGIME_MIN_REL) موافق لاتجاه النبضة. تجريبي
+      //   (عيّنة n=51 داخل الجلسة) — قابل للضبط/الإيقاف، ويُسجَّل سبب الرفض.
+      if (CFG.REGIME_FILTER_ENABLED) {
+        const reg = OracleLab.microSlope(a, CFG.REGIME_WINDOW_MS || 10000);
+        const trending = reg && Math.abs(reg.rel) >= (CFG.REGIME_MIN_REL || 0.0002);
+        const agrees = reg && ((dir === 'BUY' && reg.rel > 0) || (dir === 'SELL' && reg.rel < 0));
+        if (!trending || (CFG.REGIME_REQUIRE_AGREE !== false && !agrees)) {
+          if (now - (_lastRegimeLogMs || 0) > 5000) {
+            _lastRegimeLogMs = now;
+            const why = !trending ? 'سوق هادئ (لا اتجاه)' : 'الاتجاه الأكبر يعاكس';
+            addLog('🌊 [REGIME] تخطّي ' + dir + ' — ' + why +
+                   ' | ميل10ث ' + (reg ? (reg.rel * 1e6).toFixed(0) : '—') + 'e-6', 'info');
+          }
+          return;
+        }
+      }
 
       const strength = Math.abs(s.rel) / CFG.TICKPULSE_MIN_REL;
       const conf = Math.max(CFG.TICKPULSE_BASE_CONF, Math.min(95, Math.round(CFG.TICKPULSE_BASE_CONF + (strength - 1) * 5)));
