@@ -276,6 +276,14 @@
     WS_ERROR_THROTTLE_MS    : 5000,        // تقييد رسائل الخطأ (رسالة واحدة كل 5 ثواني)
     WS_EXEC_POOL_ENABLED    : true,        // تجمع مقابس المنفذ — لا تفقد الاتصال عند إغلاق مقبس
     WS_PROMOTE_AUTH_DELAY   : 2000,        // انتظر 2 ثانية بعد الاتصال قبل ترقية المقبس
+
+    // ─── [SCANNER] ماسح الأزواج — إشعار فقط، تبديل يدوي ─────────────────────
+    ASSET_SCANNER_ENABLED   : true,        // ✅ يرشّح أنسب زوج ويشير له (لا يبدّل تلقائياً)
+    SCANNER_INTERVAL_MS     : 15000,       // فاصل المسح
+    SCANNER_MIN_PAYOUT      : 0.90,        // العتبة الدنيا للعائد (90%) — تخفّض نقطة التعادل
+    SCANNER_MIN_MOVE_REL    : 0.00001,     // أدنى تقلب نسبي/تيك لاعتبار الزوج «نشطاً»
+    SCANNER_PAYOUT_EDGE     : 0.03,        // لا توصية إلا إذا العائد أعلى من الحالي بـ 3% على الأقل
+    SCANNER_NOTIFY_COOLDOWN_MS : 60000,    // لا تكرّر نفس التوصية قبل دقيقة
   };
 
   // ══════════════════════════════════════════════════════════════════════
@@ -1995,6 +2003,82 @@
                '(ابتلاع/3 شموع/دوجي/استمرار) لا تُقيَّم. الإشارات من الزخم (PULSE/UHNF) فقط.', 'error');
       }
     }, 1000);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 10.5  ماسح الأزواج (ASSET SCANNER) — إشعار فقط، تبديل يدوي
+  // ══════════════════════════════════════════════════════════════════════
+  //   الفكرة: يرشّح أنسب زوج للتداول ويشير له المستخدم ليبدّل يدوياً.
+  //   المعيار (مدعوم بالبيانات): العائد% أولاً — الرافعة الوحيدة المثبتة التي
+  //   تخفّض نقطة التعادل [1/(1+العائد)] — ثم الحركة الكافية لتجنّب الأزواج الميتة.
+  //   صدقٌ تقني: العائد متاح لكل الأزواج (updateAssets)، أما الحركة فلا تُقاس
+  //   إلا للأزواج التي لها تيكات (المنصة تبثّ الزوج النشط فقط)؛ لذا نصنّف
+  //   الحركة كـ«نشطة/ضعيفة/غير معروفة» بصدق ولا ندّعي قياسها لما لا نملكه.
+  //   ⚠️ لا يتداول ولا يبدّل تلقائياً — إشعار فقط؛ القرار النهائي لك.
+  const _SCANNER = { lastRec: null, lastNotifyMs: 0 };
+
+  // التقلب المحقّق النسبي من آخر التيكات (إن توفّرت) — يميّز الحي من الميت.
+  function _assetMovement(a) {
+    const buf = tickBuffers[a];
+    if (!buf || buf.length < 8) return null;
+    const w = buf.slice(-30);
+    const rets = [];
+    let prev = null;
+    for (const p of w) { if (prev != null && prev > 0 && p > 0) rets.push(Math.log(p / prev)); prev = p; }
+    if (rets.length < 3) return null;
+    const m = rets.reduce((x, y) => x + y, 0) / rets.length;
+    const v = rets.reduce((x, y) => x + (y - m) * (y - m), 0) / rets.length;
+    return Math.sqrt(v);   // عائد نسبي/تيك (مقياس حركة)
+  }
+
+  function _scanAssets() {
+    if (!CFG.ASSET_SCANNER_ENABLED) return;
+    const minPay = CFG.SCANNER_MIN_PAYOUT || 0.90;
+    const minMove = CFG.SCANNER_MIN_MOVE_REL || 0.00001;
+
+    // المرشحون: الأزواج المفتوحة بعائد ≥ العتبة
+    const cands = [];
+    for (const [a, p] of _assetPayouts) {
+      const open = _assetIsOpen.has(a) ? _assetIsOpen.get(a) : true;
+      if (!open || !(p >= minPay) || !(p < 1.5)) continue;
+      cands.push({ a, payout: p, move: _assetMovement(a) });
+    }
+    if (!cands.length) return;
+
+    // الترتيب: العائد تنازلياً، ثم الحركة المعروفة النشطة أفضل
+    cands.sort((x, y) => (y.payout - x.payout) || ((y.move || 0) - (x.move || 0)));
+    const best = cands.find(c => c.a !== activeAsset) || cands[0];
+
+    // تقييم الزوج الحالي
+    const curPay = (activeAsset && _assetPayouts.has(activeAsset)) ? _assetPayouts.get(activeAsset) : null;
+    const curMove = activeAsset ? _assetMovement(activeAsset) : null;
+    const curDead = curMove != null && curMove < minMove;
+
+    // نوصي بالتبديل فقط إذا: عائد المرشّح أعلى بفارق معتبر، أو الزوج الحالي حركته ضعيفة
+    const payoutEdge = CFG.SCANNER_PAYOUT_EDGE || 0.03;
+    const better = (curPay == null) || (best.payout >= curPay + payoutEdge) || curDead;
+    if (!better || best.a === activeAsset) return;
+
+    // خنق: لا نكرّر نفس التوصية إلا بعد فترة، أو إذا تغيّرت
+    const now = Date.now();
+    if (best.a === _SCANNER.lastRec && (now - _SCANNER.lastNotifyMs) < (CFG.SCANNER_NOTIFY_COOLDOWN_MS || 60000)) return;
+    _SCANNER.lastRec = best.a; _SCANNER.lastNotifyMs = now;
+
+    const be = (1 / (1 + best.payout) * 100).toFixed(1);
+    const moveStr = best.move == null ? 'حركة: غير معروفة (غير مشترك)'
+                  : best.move >= minMove ? 'حركة: نشطة' : 'حركة: ضعيفة';
+    const list = cands.slice(0, 3).map(c => c.a.replace('_otc', '') + ' ' + Math.round(c.payout * 100) + '%').join(' | ');
+    addLog('🧭 [SCANNER] بدّل يدوياً إلى: ' + best.a + ' | عائد ' + Math.round(best.payout * 100) +
+           '% (تعادل ' + be + '%) | ' + moveStr +
+           (curDead ? ' | ⚠️ الزوج الحالي حركته ضعيفة' : '') + ' | أعلى المرشحين: ' + list, 'signal');
+    try { const el = W.document.getElementById('cbScannerVal'); if (el) el.textContent = best.a.replace('_otc', '') + ' ' + Math.round(best.payout * 100) + '%'; } catch(_) {}
+  }
+
+  function _startAssetScanner() {
+    if (!CFG.ASSET_SCANNER_ENABLED) return;
+    _v11_setInterval(_scanAssets, CFG.SCANNER_INTERVAL_MS || 15000);
+    addLog('🧭 [SCANNER] ماسح الأزواج (إشعار فقط) — يرشّح بالعائد ≥ ' +
+           Math.round((CFG.SCANNER_MIN_PAYOUT || 0.90) * 100) + '% + حركة كافية', 'info');
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -6665,6 +6749,7 @@
       DOMHealer.start();
       _startStreamWatchdog();
       _startWSHealthMonitor();  // ✅ مراقبة صحة المقابس السلبية
+      _startAssetScanner();     // 🧭 ماسح الأزواج (إشعار فقط — تبديل يدوي)
       if (CFG.DUAL_WSS_ENABLED) {
         DualWSSManager.init();
       }
