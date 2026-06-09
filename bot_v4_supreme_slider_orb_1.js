@@ -719,7 +719,7 @@
       return;
     }
     if (_shouldBlockSend(direction, asset)) return;   // ✅ [FIX-A/C]
-    const action = direction === 'BUY' ? 'call' : 'put';
+    const action = direction === 'BUY' ? 'put' : 'call';   // 🔄 [INVERT] عكس الإشارة عند الأمر فقط
     const amt = overrideAmount || tradeAmount;
     const safeAmt = _safeAmount(amt);
     // ✅ [FIX] استخدم المدة الذكية إن توفرت
@@ -1682,7 +1682,7 @@
     // تنفيذ مباشر
     if (autoTrade) {
       _rebuildPayloadCache();
-      const action = direction === 'BUY' ? 'call' : 'put';
+      const action = direction === 'BUY' ? 'put' : 'call';   // 🔄 [INVERT] عكس الإشارة عند الأمر فقط
       const tradeSec = _snapTradeDuration(_smartDur);
       const amt = _safeAmount(tradeAmount);
       if (tradeWSOrig && tradeWS && tradeWS.readyState === 1 && !_shouldBlockSend(direction, a)) {
@@ -5592,7 +5592,7 @@
       // تنفيذ مباشر عبر DualWSS
       if (autoTrade) {
         _rebuildPayloadCache();
-        const action = dir === 'BUY' ? 'call' : 'put';
+        const action = dir === 'BUY' ? 'put' : 'call';   // 🔄 [INVERT] عكس الإشارة عند الأمر فقط
         const tradeSec = _snapTradeDuration(_smartDur);
         const amt = _safeAmount(tradeAmount);
         if (tradeWSOrig && tradeWS && tradeWS.readyState === 1 && !_shouldBlockSend(dir, a)) {
@@ -6396,7 +6396,7 @@
         return;
       }
       if (_shouldBlockSend(direction, asset)) { _currentIntervalSignal = false; return; }   // ✅ [FIX-A/C]
-      const action = direction === 'BUY' ? 'call' : 'put';
+      const action = direction === 'BUY' ? 'put' : 'call';   // 🔄 [INVERT] عكس الإشارة عند الأمر فقط
       const amt = overrideAmount || tradeAmount;
       const safeAmt = _safeAmount(amt);
       // ✅ [FIX] استخدم المدة الذكية (_lastSmartDurSec) بدل مدة المنصة
