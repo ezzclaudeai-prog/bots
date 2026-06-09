@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         ⚡ V21_TICK_PROJECTOR — Dynamic-Frame + Settlement-Price Projection (SNR) + Precision Entry Timing
-// @namespace    candle-pro-strategy-v21-tick-projector
-// @version      21.0.0
-// @description  V21 — كشف فريم ديناميكي + ساعة شمعة دقيقة + إسقاط سعر التسوية بنسبة إشارة/ضجيج (SNR) + توقيت دخول
+// @name         ⚡ V13.1_QUANTUM_ENGINE — Ultra-Low-Latency Adaptive Prediction Engine + MicroTrend Filter
+// @namespace    candle-pro-strategy-v13-quantum-engine
+// @version      13.3.0
+// @description  QUANTUM SKELETON — Diagnostic Mode + WebSocket Interception + UI
 // @author       aoirusra
 // @match        *://pocketoption.com/*
 // @match        *://*.pocketoption.com/*
@@ -124,6 +124,8 @@
     DUAL_WSS_PING_INTERVAL  : 5000,       // فاصل قياس الكمون (مللي ثانية)
     DUAL_WSS_RECONNECT_DELAY: 3000,       // تأخير إعادة الاتصال عند الفشل
     DUAL_WSS_MAX_SIGNAL_AGE : 2000,       // أقصى عمر للإشارة (مللي ثانية) قبل الرفض
+    SIGNAL_EXPIRY_MS         : 3000,       // ✅ [EXPIRY] أقصى عمر للإشارة قبل التنفيذ — إذا لم تدخل خلال 3 ثواني، انسَها
+    SIGNAL_MAX_DRIFT_REL    : 0.000080,   // ✅ [EXPIRY] أقصى انحراف نسبي للسعر عن سعر الإشارة — تحرّك أكثر = منتهية الصلاحية
     DUAL_WSS_JITTER_MS      : 0,          // [V24-FAST] بلا اهتزاز — دخول فوري
 
     // ─── حماية متقدمة ──────────────────────────────────────────────
@@ -270,25 +272,6 @@
     WS_ERROR_THROTTLE_MS    : 5000,        // تقييد رسائل الخطأ (رسالة واحدة كل 5 ثواني)
     WS_EXEC_POOL_ENABLED    : true,        // تجمع مقابس المنفذ — لا تفقد الاتصال عند إغلاق مقبس
     WS_PROMOTE_AUTH_DELAY   : 2000,        // انتظر 2 ثانية بعد الاتصال قبل ترقية المقبس
-
-    // ══════════════════════════════════════════════════════════════════
-    // ─── [V21] محرك الإسقاط الدقيق + توقيت الدخول (TickProjector) ────────
-    //   الفكرة الصحيحة فيزيائياً: الصفقة ثابتة المدة (لا إغلاق مبكر على المنصة)،
-    //   فالربح/الخسارة يتحدّدان بسعر *تسوية الصفقة* (الفتح + المدة) لا بإغلاق الشمعة.
-    //   لذا نُسقِط الحركة الاتجاهية المتوقعة على «أفق الصفقة» ونقارنها بضجيج التيك:
-    //   إن تجاوزت الحركةُ الضجيجَ بهامش (SNR) = أفضلية حقيقية، وإلا = رمي عملة عند السبريد.
-    PROJ_ENABLED          : true,          // فعّل حساب SNR للحركة المتوقعة على أفق الصفقة
-    PROJ_SLOPE_MS         : 2000,          // نافذة السرعة اللحظية (≈4-5 تيكات على فاصل ~470ms)
-    PROJ_ACCEL_MS         : 1500,          // نافذة العجلة (المشتقة الثانية) للتخميد
-    PROJ_NOISE_TICKS      : 40,            // عدد فروق التيكات لتقدير ضجيج السوق (الانحراف المعياري)
-    PROJ_DAMP_BASE        : 0.60,          // معامل تخميد الإسقاط الخطي (يمنع المبالغة في الامتداد)
-    PROJ_DAMP_WITH_ACCEL  : 0.90,          // تخميد أعلى حين تتسارع الحركة باتجاه الإشارة (زخم صحي)
-    PROJ_DAMP_VS_ACCEL    : 0.30,          // تخميد أقل حين تتباطأ الحركة (استنفاد → الإسقاط مشكوك فيه)
-    PROJ_MIN_SNR          : 1.5,           // أدنى نسبة إشارة/ضجيج لاعتبار وجود أفضلية حقيقية
-    PROJ_GATE_MODE        : 'log',         // 'log'=قياس فقط (آمن) | 'soft'=تحذير | 'veto'=حظر المعاكس القوي
-    PROJ_VETO_SNR         : 1.5,           // في وضع veto: احظر إن عاكس الإسقاطُ الصفقةَ بـSNR ≥ هذا
-    PROJ_HUD_ENABLED      : true,          // اعرض الفريم + المتبقّي للإغلاق + SNR في الواجهة
-    PROJ_EXEC_LATENCY_MS  : 400,           // كمون تنفيذ تقديري — يُطرح من أفق الإسقاط (openMs ~266-829)
   };
 
   // ══════════════════════════════════════════════════════════════════════
@@ -547,111 +530,6 @@
   })();
   try { W._oracleLabReport = () => OracleLab.report(); } catch (_) {}
 
-  // ══════════════════════════════════════════════════════════════════════
-  // [V21] TickProjector — إسقاط سعر التسوية + توقيت الدخول الدقيق
-  //   مكوّنان:
-  //   (A) ساعة الشمعة (CandleClock): تحسب «الوقت المتبقّي للإغلاق» بدقة من توقيت
-  //       الخادم وفريم الشمعة الحقيقي — boundary = (floor(serverTs/فريم)+1)*فريم.
-  //       (الفرق مع المحلي يُلغى لأننا نطرح serverTs من serverTs).
-  //   (B) محرك الإسقاط (Projector): يُسقط الحركة الاتجاهية المتوقعة على أفق الصفقة
-  //       (المدة الفعلية) باستخدام السرعة اللحظية (مشتقة أولى) مخمّدةً بالعجلة
-  //       (مشتقة ثانية)، ثم يقارنها بضجيج التيك المتوقّع على نفس الأفق ليُخرج
-  //       نسبة إشارة/ضجيج (SNR). SNR عالٍ = أفضلية حقيقية | SNR ≈ 0 = رمي عملة.
-  // ══════════════════════════════════════════════════════════════════════
-  const TickProjector = (function () {
-    const _clock = {};   // asset -> { period, boundaryTs, remainingSec, serverTs }
-
-    // (A) حدّث ساعة الشمعة من توقيت الخادم (ثوانٍ epoch) والفريم الفعلي
-    function updateClock(asset, serverTsSec, period) {
-      if (!(serverTsSec > 1e9)) return null;
-      const p = period || candlePeriod || 0;
-      if (!(p > 0)) return null;
-      const boundary  = (Math.floor(serverTsSec / p) + 1) * p;
-      const remaining = boundary - serverTsSec;
-      const c = _clock[asset] || (_clock[asset] = {});
-      c.period = p; c.boundaryTs = boundary; c.remainingSec = remaining; c.serverTs = serverTsSec;
-      return c;
-    }
-    function remaining(asset) { const c = _clock[asset]; return c ? c.remainingSec : null; }
-    function clockOf(asset)   { return _clock[asset] || null; }
-
-    // ضجيج السوق = الانحراف المعياري لفروق آخر N تيك (بوحدات السعر)
-    function tickNoise(asset) {
-      const buf = tickBuffers[asset];
-      if (!buf || buf.length < 5) return null;
-      const n = Math.min(CFG.PROJ_NOISE_TICKS, buf.length - 1);
-      let s = 0, s2 = 0, k = 0;
-      for (let i = buf.length - n; i < buf.length; i++) {
-        const d = buf[i] - buf[i - 1]; s += d; s2 += d * d; k++;
-      }
-      if (k < 2) return null;
-      const mean = s / k, varr = Math.max(0, s2 / k - mean * mean);
-      return { sd: Math.sqrt(varr), meanDelta: mean, n: k };
-    }
-
-    // (B) القرار: أسقِط الحركة على أفق الصفقة (بالثواني) وأخرِج SNR + الاتجاه
-    function decision(asset, horizonSec) {
-      if (!CFG.PROJ_ENABLED) return null;
-      const a = asset;
-      const slope = OracleLab.microSlope(a, CFG.PROJ_SLOPE_MS);
-      const noise = tickNoise(a);
-      if (!slope || !noise || !(noise.sd > 0) || !(slope.dt > 0)) return null;
-      // اطرح كمون التنفيذ التقديري من الأفق — البوت يدخل بعد ~400ms من القرار
-      let h = Math.max(1, horizonSec || candlePeriod || 10);
-      h = Math.max(0.5, h - (CFG.PROJ_EXEC_LATENCY_MS || 0) / 1000);
-      // السرعة بوحدات السعر/ثانية
-      const vPerSec = slope.abs / (slope.dt / 1000);
-      // تخميد عبر العجلة (المشتقة الثانية): تسارع مع الإشارة = ثقة أعلى، تباطؤ = أقل
-      const acc = OracleLab.microAccel(a, CFG.PROJ_ACCEL_MS);
-      let damp = CFG.PROJ_DAMP_BASE;
-      if (acc && Number.isFinite(acc.accel)) {
-        const sameSign = (acc.accel >= 0) === (vPerSec >= 0);
-        damp = sameSign ? CFG.PROJ_DAMP_WITH_ACCEL : CFG.PROJ_DAMP_VS_ACCEL;
-      }
-      const projMove = vPerSec * h * damp;                 // الانجراف الاتجاهي المتوقع على الأفق
-      // ضجيج المشي العشوائي ينمو ~ الانحراف × جذر(عدد التيكات في الأفق)
-      const tickRate = slope.ratePerSec > 0
-        ? slope.ratePerSec
-        : (noise.n / (CFG.PROJ_SLOPE_MS / 1000));
-      const ticksInHorizon = Math.max(1, tickRate * h);
-      const noiseHorizon = noise.sd * Math.sqrt(ticksInHorizon);
-      const snr = noiseHorizon > 0 ? projMove / noiseHorizon : 0;
-      const dir = projMove > 0 ? 'BUY' : (projMove < 0 ? 'SELL' : 'FLAT');
-      const lastPrice = (tickBuffers[a] && tickBuffers[a].length)
-        ? tickBuffers[a][tickBuffers[a].length - 1] : null;
-      const projClose = lastPrice != null ? lastPrice + projMove : null;
-      return {
-        dir, snr, absSnr: Math.abs(snr), projMove, projClose, lastPrice,
-        vPerSec, damp, noiseHorizon, horizonSec: h, ticksInHorizon,
-        remaining: remaining(a), edge: Math.abs(snr) >= CFG.PROJ_MIN_SNR,
-      };
-    }
-    return { updateClock, remaining, clockOf, tickNoise, decision };
-  })();
-
-  // [V21] بوابة الإسقاط — تُسجِّل الإسقاط لكل صفقة وتُعيد true إذا وجب الحظر (وضع veto)
-  //   آمنة افتراضياً: في وضع 'log' لا تغيّر السلوك إطلاقاً — قياس فقط (قابل للتقييم لاحقاً).
-  function _projGate(direction, asset, tradeSec) {
-    if (!CFG.PROJ_ENABLED) return false;
-    let p = null;
-    try { p = TickProjector.decision(normalizeAsset(asset || activeAsset), tradeSec); } catch (_) { return false; }
-    if (!p) return false;
-    const remTxt = (p.remaining != null) ? p.remaining.toFixed(1) + 'ث' : '—';
-    const pipTxt = (p.projMove >= 0 ? '+' : '') + (p.projMove * 1e5).toFixed(1) + 'pip';
-    const agree  = (p.dir === direction);
-    addLog('🧮 [PROJ] صفقة ' + direction + ' | إسقاط ' + p.dir + ' SNR ' + p.snr.toFixed(2) +
-           (p.edge ? ' ✅أفضلية' : ' ⚠️ضعيف') + ' | حركة ' + pipTxt +
-           ' | إغلاق≈' + (p.projClose != null ? p.projClose.toFixed(5) : '—') +
-           ' | متبقٍ ' + remTxt + ' | أفق ' + p.horizonSec.toFixed(1) + 'ث',
-           agree ? 'signal' : 'tick');
-    if (CFG.PROJ_GATE_MODE === 'veto' && p.dir !== 'FLAT' && !agree && p.absSnr >= CFG.PROJ_VETO_SNR) {
-      addLog('🛑 [PROJ-VETO] الإسقاط يعاكس ' + direction + ' بـSNR ' + p.absSnr.toFixed(2) +
-             ' ≥ ' + CFG.PROJ_VETO_SNR + ' — أُلغيت الصفقة', 'error');
-      return true;
-    }
-    return false;
-  }
-
   // ETC stubs
   const ETC_MAX_HIST     = 30;
   let _etcOffset         = 0;
@@ -826,7 +704,6 @@
     const tradeSec = _lastSmartDurSec >= 10
       ? _snapTradeDuration(_lastSmartDurSec)
       : _snapTradeDuration(_tradeDuration || (candlePeriod || 10));
-    if (_projGate(direction, asset, tradeSec)) return;   // [V21] بوابة الإسقاط (قياس/حظر)
     const rid = _nextReqId();
     _rebuildPayloadCache();
     const prefix = action === 'call' ? _payloadCache.prefixCall : _payloadCache.prefixPut;
@@ -1107,8 +984,8 @@
         // ✅ إعادة محاولة الإشارة المعلقة
         if (_pendingRetrySignal && autoTrade && !tradeExec) {
           const sig = _pendingRetrySignal;
-          // تأكد أن الإشارة ليست قديمة (أقل من 5 ثواني)
-          if (Date.now() - sig.timestamp < 5000) {
+          // ✅ [EXPIRY] تأكد أن الإشارة ليست قديمة (أقل من SIGNAL_EXPIRY_MS)
+          if (Date.now() - sig.timestamp < (CFG.SIGNAL_EXPIRY_MS || 3000)) {
             _pendingRetrySignal = null;
             addLog('🔄 [POOL-RETRY] إعادة محاولة الإشارة: ' + sig.direction + ' | ' + sig.asset, 'signal');
             try { DualWSSManager.executeTrade(sig.direction, sig.asset, tradeAmount); } catch(_) {}
@@ -1153,15 +1030,15 @@
       // ✅ محاولة إعادة الإشارة المعلقة إذا كان هناك مقبس متاح الآن
       if (_pendingRetrySignal && autoTrade && !tradeExec && tradeWS && tradeWS.readyState === 1) {
         const sig = _pendingRetrySignal;
-        if (Date.now() - sig.timestamp < 8000) {  // الإشارة أقل من 8 ثواني
+        if (Date.now() - sig.timestamp < (CFG.SIGNAL_EXPIRY_MS || 3000)) {  // ✅ [EXPIRY] الإشارة طازجة
           _pendingRetrySignal = null;
           addLog('🔄 [WS-HEALTH] إعادة محاولة إشارة معلقة: ' + sig.direction + ' | ' + sig.asset, 'signal');
           try { DualWSSManager.executeTrade(sig.direction, sig.asset, tradeAmount); } catch(_) {}
         } else {
-          _pendingRetrySignal = null;  // إشارة قديمة — تخلّص منها
+          _pendingRetrySignal = null;  // ✅ [EXPIRY] إشارة منتهية — تخلّص منها
         }
-      } else if (_pendingRetrySignal && Date.now() - _pendingRetrySignal.timestamp >= 8000) {
-        _pendingRetrySignal = null;  // إشارة قديمة — تخلّص منها
+      } else if (_pendingRetrySignal && Date.now() - _pendingRetrySignal.timestamp >= (CFG.SIGNAL_EXPIRY_MS || 3000)) {
+        _pendingRetrySignal = null;  // ✅ [EXPIRY] إشارة منتهية — تخلّص منها
       }
       // فحص مقبس أوراكل
       if (typeof DualWSSManager !== 'undefined') {
@@ -1307,7 +1184,6 @@
           if (Array.isArray(arr)) {
             const evName = arr[0], payload = arr[1] || {};
             if (evName==='changeSymbol' && payload?.asset) onActiveAsset(String(payload.asset), 'changeSymbol_send');
-            if (evName==='changeSymbol' && payload?.period) onPlatformTimeframe(Number(payload.period), 'changeSymbol'); // [V21] الفريم بالثواني
             if (evName==='saveCharts') {
               const s = payload.settings || {};
               const ft = parseInt(s.fastTimeframe, 10);
@@ -1426,8 +1302,13 @@
             if (_pendingRetrySignal && autoTrade && !tradeExec) {
               const sig = _pendingRetrySignal;
               _pendingRetrySignal = null;
-              addLog('🔄 [RETRY] إعادة محاولة الإشارة المعلقة: ' + sig.direction + ' | ' + sig.asset, 'signal');
-              try { DualWSSManager.executeTrade(sig.direction, sig.asset, tradeAmount); } catch(_) {}
+              // ✅ [EXPIRY] تحقق من صلاحية الإشارة قبل إعادة المحاولة
+              if (Date.now() - sig.timestamp < (CFG.SIGNAL_EXPIRY_MS || 3000)) {
+                addLog('🔄 [RETRY] إعادة محاولة الإشارة المعلقة: ' + sig.direction + ' | ' + sig.asset, 'signal');
+                try { DualWSSManager.executeTrade(sig.direction, sig.asset, tradeAmount); } catch(_) {}
+              } else {
+                addLog('🗑️ [EXPIRY] إشارة معلقة منتهية — تم نسيانها', 'info');
+              }
             }
           }
         }
@@ -1650,7 +1531,6 @@
       try { DualWSSManager.onSignalsUpdate(data.signals); } catch(_){}
     }
     if (evName==='changeSymbol' && data?.asset) onActiveAsset(data.asset, 'changeSymbol');
-    if (evName==='changeSymbol' && data?.period) onPlatformTimeframe(Number(data.period), 'changeSymbol'); // [V21] الفريم بالثواني
     if (evName==='saveCharts') { const s = (data&&data.settings)||data||{}; _extractFastCloseAt(s, data||{}); }
 
     // ─── معالجة إشارات signals من المنصة ──────────────────────────────────
@@ -1817,11 +1697,7 @@
   function processHistoryFast(asset, period, history) {
     const a = normalizeAsset(asset);
     if (!Array.isArray(history) || history.length < 4) return;
-    // [V21] كشف الفريم الديناميكي: التقاط أولي + احترام تغيّر الفريم بعد القفل
-    if (period && period > 0) {
-      if (!candlePeriod) { candlePeriod = period; durSource = 'history'; updateHUD(); }
-      else if (period !== candlePeriod && Date.now() > _periodLockUntil) { onPlatformTimeframe(period, 'history'); }
-    }
+    if (!candlePeriod && period && period>0) { candlePeriod = period; durSource = 'history'; updateHUD(); }
 
     // ⚡ [UHNF] خط أنابيب مباشر — فحص الذيل أولاً (أسرع مسار)
     _uhnFProcessTail(asset, period, history);
@@ -1996,16 +1872,8 @@
   function onPlatformTimeframe(secs, source) {
     if (!Number.isFinite(secs) || secs<1 || secs>3600) return;
     if (secs === candlePeriod) return;
-    const prev = candlePeriod;
     candlePeriod = secs; durSource = source||'platform'; _lastDetectedPeriod = secs; _lastDetectedCount = CFG.PERIOD_TRUSTED_OVERRIDE;
     _periodLockUntil = Date.now() + 30000;
-    // [V21] الفريم تغيّر فعلياً → امسح شموع الزوج كي لا تختلط فريمات (5ث مع 15ث)
-    if (prev && prev !== secs) {
-      try { if (activeAsset) { delete candleBuffers[activeAsset]; delete currentCandles[activeAsset]; } } catch(_) {}
-      addLog('🕒 [FRAME] تبدّل الفريم: ' + fmtDur(prev) + ' → ' + fmtDur(secs) + ' (' + (source||'') + ') — أُعيد بناء الشموع', 'asset');
-    } else {
-      addLog('🕒 [FRAME] الفريم: ' + fmtDur(secs) + ' (' + (source||'') + ')', 'info');
-    }
     _rebuildPayloadCache(); updateHUD();
   }
 
@@ -2035,8 +1903,6 @@
     tickBuffers[a].push(price);
     if (tickBuffers[a].length > 600) tickBuffers[a].shift();
     try { OracleLab.onTick(a, price, labTs); } catch(_) {}   // [V16+V24] التقاط خام بتوقيت الخادم الدقيق
-    // [V21] حدّث ساعة الشمعة بتوقيت الخادم (ثوانٍ) لحساب «المتبقّي للإغلاق» بدقة
-    try { if (typeof serverTs === 'number' && serverTs > 1e9 && serverTs < 1e11) TickProjector.updateClock(a, serverTs, candlePeriod); } catch(_) {}
     try { if (a === activeAsset && typeof DualWSSManager !== 'undefined') { DualWSSManager.tickPulse(a); } } catch(_) {}  // ✅ [V14] TickPulse فقط — fastEval معطّل
     totalTicks++;
     if (!activeAsset) onActiveAsset(a, 'firstTick');
@@ -2763,7 +2629,7 @@
   let _lastSmartDurSec = 0;     // ✅ آخر مدة ذكية محسوبة — تُستخدم في التنفيذ الفعلي
   let _popupEnabled    = true;   // ✅ مفعّل افتراضياً — يمكن تعطيله من الواجهة
   let _spActive        = false;  // ✅ هل الإشعار معروض حالياً؟ (منع التداخل)
-  let _spSignalQueue   = null;   // ✅ طابور الإشارات المعلقة (تُعرض بعد إغلاق الحالية)
+  let _spSignalQueue   = null;   // ✅ [EXPIRY] إشارة معلقة — تُفحص صلاحيتها قبل العرض
   let _intervalDurIndex = 0;     // ✅ [INTERVAL] عداد دورة المدة لتنويع صفقات الفاصل
 
   // ─── حساب مدة الصفقة الذكية ─────────────────────────────────────
@@ -2860,10 +2726,18 @@
     // opts: { direction, price, durationSec, closeAtMs, confidence, pattern, asset }
     if (!_popupEnabled) return;
 
-    // ✅ إذا كان إشعار آخر معروض، أضف الإشارة الجديدة للطابور
+    // ✅ [EXPIRY] إذا كان إشعار آخر معروض، استبدل الطابور بالإشارة الجديدة
+    //    لا تتراكم الإشارات — الإشارة القديمة منتهية الصلاحية لأن السعر تحرّك
     if (_spActive) {
+      if (_spSignalQueue) {
+        const _qAge = Date.now() - (_spSignalQueue._enqueueTs || 0);
+        if (_qAge > (CFG.SIGNAL_EXPIRY_MS || 3000)) {
+          addLog('🗑️ [SLIDER] إشارة معلقة منتهية الصلاحية (' + Math.round(_qAge/1000) + 'ث) — تم نسيانها', 'info');
+        }
+      }
+      opts._enqueueTs = Date.now();
       _spSignalQueue = opts;
-      addLog('⏳ [SLIDER] إشعار نشط — الإشارة الجديدة في الطابور', 'info');
+      addLog('⏳ [SLIDER] إشعار نشط — الإشارة الجديدة حلت محل القديمة في الطابور', 'info');
       return;
     }
 
@@ -2985,12 +2859,26 @@
     const autoCloseMs = _computeAutoCloseMs(durSec);
     _spAutoCloseTimer = setTimeout(() => {
       hideSignalPopup();
-      // ✅ بعد الإغلاق، تحقق من طابور الإشارات المعلقة
+      // ✅ [EXPIRY] بعد الإغلاق، تحقق من صلاحية الإشارة المعلقة
       if (_spSignalQueue) {
         const pending = _spSignalQueue;
         _spSignalQueue = null;
-        // تأخير بسيط 300ms قبل عرض الإشارة التالية (انتقال سلس)
-        setTimeout(() => { showSignalPopup(pending); }, 300);
+        const _pAge = Date.now() - (pending._enqueueTs || 0);
+        if (_pAge > (CFG.SIGNAL_EXPIRY_MS || 3000)) {
+          addLog('🗑️ [SLIDER] إشارة معلقة منتهية الصلاحية (' + Math.round(_pAge/1000) + 'ث) — تم نسيانها', 'info');
+        } else if (pending.price && activeAsset) {
+          // ✅ [EXPIRY] تحقق من انحراف السعر
+          const _tb = tickBuffers[activeAsset];
+          const _currentPrice = (_tb && _tb.length) ? _tb[_tb.length - 1] : 0;
+          if (_currentPrice && Math.abs(_currentPrice - pending.price) / pending.price > (CFG.SIGNAL_MAX_DRIFT_REL || 0.000080)) {
+            addLog('🗑️ [SLIDER] سعر الإشارة تحرّك كثيراً — منتهية الصلاحية', 'info');
+          } else {
+            // تأخير بسيط 300ms قبل عرض الإشارة التالية (انتقال سلس)
+            setTimeout(() => { showSignalPopup(pending); }, 300);
+          }
+        } else {
+          setTimeout(() => { showSignalPopup(pending); }, 300);
+        }
       }
     }, autoCloseMs);
 
@@ -3482,20 +3370,6 @@
     // تحديث مؤشرات الوقت الحقيقي عند كل تيك (كل N تيك)
     if (totalTicks % 10 === 0 && activeAsset && candleBuffers[activeAsset]) {
       _updateLiveIndicators(candleBuffers[activeAsset]);
-    }
-    // [V21] اعرض الفريم + المتبقّي للإغلاق + SNR لحظياً في خانة الفريم بالواجهة
-    if (CFG.PROJ_HUD_ENABLED && activeAsset && totalTicks % 5 === 0) {
-      try {
-        const pEl = W.document.getElementById('cbPeriod');
-        if (pEl && candlePeriod) {
-          const c = TickProjector.clockOf(activeAsset);
-          const remTxt = (c && Number.isFinite(c.remainingSec)) ? ' ⏳' + c.remainingSec.toFixed(0) + 'ث' : '';
-          const horizon = _lastSmartDurSec >= 10 ? _lastSmartDurSec : (_tradeDuration || candlePeriod);
-          const d = TickProjector.decision(activeAsset, horizon);
-          const snrTxt = d ? ' · SNR ' + d.snr.toFixed(2) + (d.edge ? '✅' : '') : '';
-          pEl.textContent = fmtDur(candlePeriod) + '(' + durSource + ')' + remTxt + snrTxt;
-        }
-      } catch(_) {}
     }
   }
 
@@ -6006,8 +5880,34 @@
     // ─── طابور الإشارات (آخر إشارة فقط) ────────────────────────────────
     //   ✅ [SLIDER] يعرض السلايدر دائماً — حتى بدون تشغيل التداول التلقائي
     //   السلايدر = إشعار مرئي فقط، التنفيذ الفعلي يتطلب autoTrade
+    // ✅ [EXPIRY] هل الإشارة منتهية الصلاحية؟ (عمر > الحد أو السعر تحرّك كثيراً)
+    function _isSignalExpired(signal) {
+      if (!signal) return true;
+      const age = Date.now() - (signal.timestamp || 0);
+      if (age > (CFG.SIGNAL_EXPIRY_MS || 3000)) return true;
+      // تحقق من انحراف السعر
+      if (signal.price && signal.asset) {
+        const _tb = tickBuffers[normalizeAsset(signal.asset)];
+        const _currentPrice = (_tb && _tb.length) ? _tb[_tb.length - 1] : 0;
+        if (_currentPrice && Math.abs(_currentPrice - signal.price) / signal.price > (CFG.SIGNAL_MAX_DRIFT_REL || 0.000080)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     function _enqueueSignal(signal) {
       if (Date.now() - signal.timestamp > CFG.DUAL_WSS_MAX_SIGNAL_AGE) return;
+
+      // ✅ [EXPIRY] إذا كانت هناك إشارة معلقة، تحقق من صلاحيتها — انسَها إذا انتهت
+      if (_signalQueue) {
+        if (_isSignalExpired(_signalQueue)) {
+          addLog('🗑️ [EXPIRY] إشارة معلقة منتهية — تم نسيانها | ' + _signalQueue.direction + ' @ ' + _signalQueue.price?.toFixed(5), 'info');
+          _signalQueue = null;
+          // ✅ [EXPIRY] ألغِ مؤقت ETE أيضاً — الإشارة القديمة منتهية
+          if (_entryTimer) { clearInterval(_entryTimer); _entryTimer = null; }
+        }
+      }
 
       if (_lastSignal && _lastSignal.direction === signal.direction &&
           Date.now() - _lastSignal.timestamp < 2000) return;
@@ -6051,6 +5951,17 @@
       if (!_running) return;
 
       const signal = _signalQueue;
+
+      // ✅ [EXPIRY] فحص صلاحية الإشارة قبل التنفيذ — إذا فات الوقت أو تحرّك السعر، انسَها
+      if (_isSignalExpired(signal)) {
+        const _age = Date.now() - (signal.timestamp || 0);
+        addLog('🗑️ [EXPIRY] إشارة منتهية — تم نسيانها | ' + signal.direction + ' @ ' +
+               (signal.price?.toFixed(5) || '?') + ' | عمر ' + Math.round(_age/1000) + 'ث', 'info');
+        _signalQueue = null;
+        _currentIntervalSignal = false;
+        return;
+      }
+
       _signalQueue = null;
 
       // ✅ [INTERVAL-FIX] عَلِّم أن الإشارة الحالية من الفاصل لتجاوز البوابات
@@ -6263,8 +6174,28 @@
         : (first.reason.indexOf('تباطؤ') === 0) ? 'يتباطأ (استنفاد)'
         : (first.reason + ' يعاكس');
       addLog('⏳ [ENTRY] انتظار توقيت — الزخم ' + _waitWord + ' ' + direction + ' | مهلة ' + maxWait + 'ms (' + Math.round(CFG.ETE_WAIT_FRAC*100) + '% من ' + durSec + 'ث)', 'info');
+      // ✅ [EXPIRY] سجّل وقت بدء الانتظار — إذا تجاوز عمر الإشارة الحد، ألغِ
+      const _eteStartTs = Date.now();
       _entryTimer = setInterval(() => {
         if (!_running || tradeExec) { clearInterval(_entryTimer); _entryTimer = null; return; }
+        // ✅ [EXPIRY] إذا مضى وقت طويل منذ الإشارة ولم يدخل — انسَ الصفقة
+        const _elapsedSinceSignal = Date.now() - (_eteStartTs - maxWait); // تقدير عمر الإشارة
+        const _signalAge = Date.now() - (_lastSignal ? _lastSignal.timestamp : _eteStartTs);
+        if (_signalAge > (CFG.SIGNAL_EXPIRY_MS || 3000)) {
+          clearInterval(_entryTimer); _entryTimer = null;
+          addLog('🗑️ [EXPIRY] إشارة منتهية أثناء انتظار ETE (' + Math.round(_signalAge/1000) + 'ث) — تم نسيان الصفقة ' + direction, 'info');
+          return;
+        }
+        // ✅ [EXPIRY] تحقق من انحراف السعر عن سعر الإشارة
+        if (_lastSignal && _lastSignal.price && asset) {
+          const _tb = tickBuffers[normalizeAsset(asset)];
+          const _curP = (_tb && _tb.length) ? _tb[_tb.length - 1] : 0;
+          if (_curP && Math.abs(_curP - _lastSignal.price) / _lastSignal.price > (CFG.SIGNAL_MAX_DRIFT_REL || 0.000080)) {
+            clearInterval(_entryTimer); _entryTimer = null;
+            addLog('🗑️ [EXPIRY] السعر تحرّك كثيراً أثناء انتظار ETE — تم نسيان الصفقة ' + direction, 'info');
+            return;
+          }
+        }
         const c = _entryAligned(asset, direction);
         if (c.ok && c.reason !== 'مسطّح') {
           clearInterval(_entryTimer); _entryTimer = null;
@@ -6285,6 +6216,24 @@
     function _executeDualTrade(direction, asset, overrideAmount, count) {
       if (!autoTrade) { _currentIntervalSignal = false; return; }
       if (tradeExec) { _currentIntervalSignal = false; return; }
+      // ✅ [EXPIRY] إذا الإشارة منتهية الصلاحية (عمر > 3ث أو السعر تحرّك كثيراً)، انسَ الصفقة
+      if (_lastSignal) {
+        const _sigAge = Date.now() - (_lastSignal.timestamp || 0);
+        if (_sigAge > (CFG.SIGNAL_EXPIRY_MS || 3000)) {
+          addLog('🗑️ [EXPIRY] إشارة منتهية قبل التنفيذ (' + Math.round(_sigAge/1000) + 'ث) — تم نسيان ' + direction, 'info');
+          _currentIntervalSignal = false;
+          return;
+        }
+        if (_lastSignal.price && asset) {
+          const _tb = tickBuffers[normalizeAsset(asset)];
+          const _curP = (_tb && _tb.length) ? _tb[_tb.length - 1] : 0;
+          if (_curP && Math.abs(_curP - _lastSignal.price) / _lastSignal.price > (CFG.SIGNAL_MAX_DRIFT_REL || 0.000080)) {
+            addLog('🗑️ [EXPIRY] السعر تحرّك كثيراً قبل التنفيذ — تم نسيان ' + direction, 'info');
+            _currentIntervalSignal = false;
+            return;
+          }
+        }
+      }
       if (!tradeWSOrig || !tradeWS || tradeWS.readyState !== 1) {
         // ✅ حفظ الإشارة المعلقة لإعادة المحاولة عند إعادة الاتصال
         _pendingRetrySignal = { direction, asset, timestamp: Date.now() };
@@ -6302,7 +6251,6 @@
       const tradeSec = _lastSmartDurSec >= 10
         ? _snapTradeDuration(_lastSmartDurSec)
         : _snapTradeDuration(_tradeDuration || (candlePeriod || 10));
-      if (_projGate(direction, asset, tradeSec)) { _currentIntervalSignal = false; return; }   // [V21] بوابة الإسقاط
       let nOrders = Math.max(1, Math.min(count || 1, 2));   // [V24-2X] حتى صفقتين
       // [V25] فحص الرصيد — يمنع NotEnoughFunds: قلّل عدد الأوامر أو تخطَّ إن لم يكفِ
       const _bal = (typeof currentBalance === 'number' && currentBalance > 0) ? currentBalance
