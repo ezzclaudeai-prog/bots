@@ -67,3 +67,20 @@ margin     = الانحراف المعياري لضجيج التيك × MULT
 `MARKETSTATE_EFF_CHOPPY`, `MARKETSTATE_QUIET_FRAC`, `RISKPROJ_ENABLED`,
 `RISKPROJ_DAMP`, `RISKPROJ_MARGIN_MULT`, `RISKPROJ_BLOCK_CHOPPY` — كلها قابلة
 للضبط أعلى الملف.
+
+---
+
+## V21-A — استهداف ١٥ث + التداول مع الترند فقط
+
+بناءً على التوصية (قياس على فريم أطول حيث الحركة > السبريد):
+
+- **حد أدنى ١٥ث لكل صفقة** (`TARGET_MIN_SEC=15`): رُفعت كل أرضيات المدة من ١٠ث
+  إلى ١٥ث (`_snapTradeDuration`, `snapToPOTime`, وفحصا HARD-BLOCK في مساري
+  UHNF و tickPulse). لا تنفيذ تحت ١٥ث مطلقاً.
+- **تحذير فريم قصير**: عند ضبط فريم < ١٥ث يطبع `⚠️ [FRAME]` ناصحاً بـ ١٥ث+.
+- **التداول مع الترند فقط** (`RISKPROJ_TREND_ONLY=true`): في `tickPulse` لا
+  ينفّذ إلا إذا كانت حالة السوق `TRENDING_UP`/`TRENDING_DOWN` **و** اتجاه الصفقة
+  يوافق الترند. يُرفض كل ما هو `QUIET`/`CHOPPY`/`NEUTRAL` وكل دخول معاكس للترند
+  بسطر `🚫 [RISK]`.
+
+كلا الإعدادين قابلان للإيقاف من CFG إن أردت اختبار سلوك مختلف.

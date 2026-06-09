@@ -282,6 +282,9 @@
     RISKPROJ_DAMP           : 0.5,         // تخميد امتداد الميل حتى الإغلاق (لا يستمر خطياً)
     RISKPROJ_MARGIN_MULT    : 1.0,         // الهامش المطلوب = MULT × انحراف ضجيج التيك المعياري
     RISKPROJ_BLOCK_CHOPPY   : true,        // ارفض الدخول في حالة CHOPPY (السكالب يخسر في التذبذب)
+    // ─── [V21-A] استهداف ١٥ث + التداول مع الترند فقط ──────────────────────────
+    TARGET_MIN_SEC          : 15,          // ✅ لا صفقات تحت ١٥ث (الحركة > السبريد). كان 10
+    RISKPROJ_TREND_ONLY     : true,        // ✅ لا تنفيذ إلا في TRENDING + اتجاه الصفقة يوافق الترند
 
     // ─── [V16] مختبر الأوراكل (OracleLab) — قياس خام لتطوير الأوراكل ──────────
     ORACLE_LAB_ENABLED      : true,        // ✅ تسجيل خام: يربط كل صفقة بمصدرها ونتيجتها (آمن)
@@ -316,8 +319,8 @@
   // ✅ [V14.4] المسموح فعلياً: أي ثانية صحيحة ≥ 3 (3،4،5،6،7...). الممنوع فقط 1 و 2.
   //   لا تثبيت على شبكة — نحترم مدة المستخدم بالضبط، فقط حد أدنى 3ث.
   function _snapTradeDuration(secs) {
-    // ✅ [HARD-BLOCK] لا صفقات تحت 10 ثواني — مطلق لا استثناء
-    const HARD_MIN = 10;
+    // ✅ [V21-A] لا صفقات تحت TARGET_MIN_SEC (افتراضي ١٥ث) — مطلق لا استثناء
+    const HARD_MIN = CFG.TARGET_MIN_SEC || 15;
     const HARD_MAX = 60;
     if (CFG.SCALP_FIXED_ENABLED) {
       let fx = CFG.SCALP_FIXED_SEC || HARD_MIN;
@@ -330,11 +333,12 @@
   }
 
   function snapToPOTime(secs) {
-    if (!secs || secs <= 0) return 10;  // ✅ [INTERVAL] افتراضي 10 ثواني بدل 5
+    const _min = (CFG.TARGET_MIN_SEC || 15);
+    if (!secs || secs <= 0) return _min;  // ✅ [V21-A] افتراضي ١٥ث
     let best = PO_VALID_TIMES[0];
     for (const t of PO_VALID_TIMES) { if (Math.abs(t - secs) < Math.abs(best - secs)) best = t; }
-    // ✅ [INTERVAL] لا نعيد أبداً أقل من 10 ثواني
-    return Math.max(best, 10);
+    // ✅ [V21-A] لا نعيد أبداً أقل من TARGET_MIN_SEC
+    return Math.max(best, _min);
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -858,9 +862,9 @@
     const tradeSec = _lastSmartDurSec >= 10
       ? _snapTradeDuration(_lastSmartDurSec)
       : _snapTradeDuration(_tradeDuration || (candlePeriod || 10));
-    // ✅ [HARD-BLOCK] رفض أي صفقة تحت 10 ثواني — حماية مطلقة
-    if (tradeSec < 10) {
-      addLog('🚫 [HARD-BLOCK] رُفض executeTrade — المدة (' + tradeSec + 'ث) < 10ث', 'error');
+    // ✅ [V21-A] رفض أي صفقة تحت TARGET_MIN_SEC — حماية مطلقة
+    if (tradeSec < (CFG.TARGET_MIN_SEC || 15)) {
+      addLog('🚫 [HARD-BLOCK] رُفض executeTrade — المدة (' + tradeSec + 'ث) < ' + (CFG.TARGET_MIN_SEC || 15) + 'ث', 'error');
       return;
     }
     const rid = _nextReqId();
@@ -2053,6 +2057,10 @@
     try {
       addLog('🕐 [FRAME] الفريم: ' + fmtDur(secs) + ' (' + durSource + ')' +
              (prev ? ' ← ' + fmtDur(prev) : ''), 'signal');
+      // ✅ [V21-A] تحذير: فريم قصير جداً (< الهدف) — الحركة لا تتجاوز السبريد
+      if (secs < (CFG.TARGET_MIN_SEC || 15)) {
+        addLog('⚠️ [FRAME] الفريم ' + fmtDur(secs) + ' أقصر من الهدف (' + (CFG.TARGET_MIN_SEC || 15) + 'ث) — يُنصح بـ ١٥ث+ (الحركة > السبريد)', 'error');
+      }
     } catch (_) {}
     _rebuildPayloadCache(); updateHUD();
   }
@@ -5587,6 +5595,18 @@
           addLog('🚫 [RISK] حالة السوق متذبذبة (CHOPPY) — تخطّي ' + dir + ' (السكالب يخسر في التذبذب)', 'error');
           return;
         }
+        // ✅ [V21-A] التداول مع الترند فقط: لا تنفيذ إلا في TRENDING + اتجاه الصفقة يوافق الترند
+        if (CFG.RISKPROJ_TREND_ONLY) {
+          if (!ms || (ms.regime !== 'TRENDING_UP' && ms.regime !== 'TRENDING_DOWN')) {
+            addLog('🚫 [RISK] السوق ليس في ترند واضح (' + (ms ? MarketState.regimeLabel(ms.regime) : 'غير محدّد') + ') — تخطّي ' + dir, 'error');
+            return;
+          }
+          const trendDir = ms.regime === 'TRENDING_UP' ? 'BUY' : 'SELL';
+          if (dir !== trendDir) {
+            addLog('🚫 [RISK] ' + dir + ' يعاكس الترند (' + MarketState.regimeLabel(ms.regime) + ') — تخطّي (مع الترند فقط)', 'error');
+            return;
+          }
+        }
         const pj = _projectClose(a, dir, _projDur);
         if (!pj.ok) {
           addLog('🚫 [RISK] إسقاط ' + dir + ' غير مربح: حركة متوقعة ' + (pj.projMoveRel * 1e6).toFixed(1) +
@@ -5622,9 +5642,9 @@
         _rebuildPayloadCache();
         const action = dir === 'BUY' ? 'call' : 'put';
         const tradeSec = _snapTradeDuration(_smartDur);
-        // ✅ [HARD-BLOCK] رفض أي صفقة تحت 10 ثواني قبل الإرسال
-        if (tradeSec < 10) {
-          addLog('🚫 [HARD-BLOCK] رُفض — مدة الصفقة (' + tradeSec + 'ث) أقل من 10 ثواني', 'error');
+        // ✅ [V21-A] رفض أي صفقة تحت TARGET_MIN_SEC قبل الإرسال
+        if (tradeSec < (CFG.TARGET_MIN_SEC || 15)) {
+          addLog('🚫 [HARD-BLOCK] رُفض — مدة الصفقة (' + tradeSec + 'ث) أقل من ' + (CFG.TARGET_MIN_SEC || 15) + ' ثانية', 'error');
           return;
         }
         const amt = _safeAmount(tradeAmount);
