@@ -160,7 +160,7 @@ def report(path):
 
     # (3) حافة الزخم: نسخة طبق الأصل من منطق TickPulse
     print("\n[3] حافة الزخم (ميل 1500ms ≥30e-6 + اتساق نافذتين، تبريد 1ث):")
-    horizons = [5, 10, 15, 20, 30]
+    horizons = [5, 10, 15, 20, 30, 45, 60, 90, 120]
     res = {h: [0, 0] for h in horizons}
     fired = 0
     for a, arr in ticks.items():
@@ -193,8 +193,45 @@ def report(path):
     for h in horizons:
         w, l = res[h]
         if w + l:
-            print(f"      أفق {h:>2}ث: W{w} L{l}  →  WR {100*w/(w+l):.1f}%")
+            print(f"      أفق {h:>3}ث: W{w} L{l}  →  WR {100*w/(w+l):.1f}%")
     print("    (50% = لا حافة. <50% = الزخم مضلِّل والانعكاس أفضل.)")
+
+    # (3b) حافة الفريم الأعلى: نبني شموعاً من تيار التيك عند فترات مختلفة،
+    # ونختبر — لكل فريم — هل اتجاه آخر شمعة مغلقة يتنبأ باتجاه الشمعة التالية
+    # (حافة الاستمرار) أم بعكسها (حافة الانعكاس). كل مصدر يُقاس على حدة.
+    print("\n[3b] حافة الفريم الأعلى (شموع مبنية من التيك — هل تتنبأ الشمعة التالية؟):")
+    print("     cont = الاستمرار يربح | rev = الانعكاس يربح | n = عدد الشموع المختبرة")
+    for period in (5, 10, 15, 30, 60):
+        cont = rev = flat = 0
+        for a, arr in ticks.items():
+            if len(arr) < 60:
+                continue
+            # تجميع التيكات في شموع period-ثانية: نأخذ سعر الإغلاق لكل دلو
+            buckets = {}
+            for ts, px in arr:
+                key = int(ts // period)
+                buckets[key] = px  # آخر سعر في الدلو = الإغلاق
+            keys_sorted = sorted(buckets)
+            closes = [buckets[k] for k in keys_sorted]
+            # نحتاج 3 إغلاقات متتالية على دلاء متلاصقة لقياس اتجاه→التالي
+            for i in range(2, len(keys_sorted)):
+                if keys_sorted[i] != keys_sorted[i - 1] + 1 or keys_sorted[i - 1] != keys_sorted[i - 2] + 1:
+                    continue
+                prev_move = closes[i - 1] - closes[i - 2]   # اتجاه الشمعة المغلقة
+                next_move = closes[i] - closes[i - 1]        # اتجاه الشمعة التالية
+                if prev_move == 0 or next_move == 0:
+                    flat += 1
+                    continue
+                if (prev_move > 0) == (next_move > 0):
+                    cont += 1
+                else:
+                    rev += 1
+        n = cont + rev
+        if n >= 10:
+            print(f"      فريم {period:>2}ث: استمرار {100*cont/n:.0f}% | انعكاس {100*rev/n:.0f}%  (n={n})")
+        else:
+            print(f"      فريم {period:>2}ث: عينة غير كافية (n={n})")
+    print("     (≈50% = لا حافة. انحراف واضح ومتسق عبر الأصول = مصدر يستحق الاختبار.)")
 
     # (4)+(5) الصفقات الفعلية + حافة المدة
     cmap = {d["id"]: d for d in deals if "id" in d}
