@@ -1409,7 +1409,11 @@
     // ✅ [V14.3] التقط مدة المستخدم المختارة (زر S3/S15/...) من إعدادات الشارت أيضاً
     try {
       const ft = parseInt(settings && settings.fastTimeframe, 10);
-      if (Number.isFinite(ft) && ft >= 1 && ft !== _tradeDuration) { _tradeDuration = ft; _rebuildPayloadCache(); }
+      if (Number.isFinite(ft) && ft >= 1) {
+        if (ft !== _tradeDuration) { _tradeDuration = ft; _rebuildPayloadCache(); }
+        // ✅ [V26] فريم المنصة المختار يقود candlePeriod مباشرة (سلطة مركزية واحدة)
+        onPlatformTimeframe(ft, 'saveCharts');
+      }
     } catch(_) {}
     const fca = parseInt(settings.fastCloseAt || (fullPayload && fullPayload.fastCloseAt) || 0, 10);
     if (!Number.isFinite(fca) || fca <= 0) return;
@@ -1924,9 +1928,12 @@
   function onPlatformTimeframe(secs, source) {
     if (!Number.isFinite(secs) || secs<1 || secs>3600) return;
     if (secs === candlePeriod) return;
+    const _prev = candlePeriod;
     candlePeriod = secs; durSource = source||'platform'; _lastDetectedPeriod = secs; _lastDetectedCount = CFG.PERIOD_TRUSTED_OVERRIDE;
     _periodLockUntil = Date.now() + 30000;
     _rebuildPayloadCache(); updateHUD();
+    // ✅ [V26] التقاط فريم المنصة مباشرة — مرئي في السجل، ويقود النافذة الزمنية التكيفية
+    addLog('🖼️ [FRAME] فريم المنصة: ' + secs + 'ث' + (_prev ? ' (كان ' + _prev + 'ث)' : '') + ' — المصدر: ' + (source||'platform'), 'signal');
   }
 
   function onTick(asset, price, serverTs, srcRole) {
