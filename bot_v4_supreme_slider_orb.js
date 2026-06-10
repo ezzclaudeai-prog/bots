@@ -251,6 +251,17 @@
     FIXF_NO_DOUBLE_AFTER_LOSSES : 2,        // ✅ [FIX-F] إذا lossStreak ≥ هذا → صفقة واحدة فقط (لا ×2)
     // ─── [V17] محرّك توقيت الدخول (ETE) — لا تدخل إلا حين يوافق الزخم اللحظي ──
     ENTRY_TIMING_ENABLED    : true,        // ✅ تأجيل الدخول حتى يوافق ميل التيك اتجاه الصفقة
+    // ─── [V27] تحجيم المبلغ نسبةً للرصيد — يمنع موت البوت عند «رصيد غير كافٍ» ──
+    //   التحليل أثبت: المبلغ ثابت $1000 والرصيد هبط إلى $593 → كل الصفقات تُرفض.
+    //   الحل: المبلغ = نسبة من الرصيد الحالي، مقيّدة بحد أدنى/أقصى. المبلغ اليدوي
+    //   (سلايدر) يصبح السقف الأعلى. لا يتجاوز المبلغ الرصيد المتاح أبدًا.
+    RISK_PCT_ENABLED        : true,        // ✅ [V27] فعّل التحجيم النسبي
+    RISK_PCT                : 0.03,        // 3% من الرصيد لكل صفقة
+    RISK_MIN_AMOUNT         : 1,           // الحد الأدنى للمبلغ ($)
+    RISK_MAX_AMOUNT         : 0,           // 0 = استخدم المبلغ اليدوي كسقف | >0 = سقف ثابت ($)
+    // ─── [V27] تشديد منع دخول قمة الاندفاع (شراء القمة/بيع القاع في سوق متذبذب) ──
+    ETE_DECEL_HARD_REL      : 0.000004,   // عجلة معاكسة فوق هذا = استنفاد مؤكد → احجب (أصرم من DECEL_REL)
+    ETE_RETRACE_HARD_REL    : 0.000060,   // قفزة طازجة فوق هذا = حادة جدًا → انتظر ارتدادًا حتى لو الزخم متّسق
     ETE_SLOPE_MS            : 2500,        // ✅ [FIX] التيك ~470ms → 1200ms كان تيكين فقط. 2500ms ≈ 5 تيكات = ميل موثوق
     ETE_MIN_TICKS           : 3,           // ✅ [FIX] أدنى عدد تيكات لاعتبار الميل اتجاهاً حقيقياً (وإلا «مسطّح» → ينتظر)
     ETE_MIN_REL             : 0.000020,   // أدنى عائد نسبي ليُعدّ الميل اتجاهاً (وإلا «مسطّح»)
@@ -675,13 +686,27 @@
   }
 
   function _safeAmount(amt) { return Math.max(1, Math.round(amt * 100) / 100); }
+  // [V27] المبلغ المُحجَّم نسبةً للرصيد: نسبة من الرصيد الحالي، مقيّدة بحد أدنى وسقف
+  //   (السقف = المبلغ اليدوي ما لم يُضبط RISK_MAX_AMOUNT). لا يتجاوز الرصيد المتاح.
+  function _sizedAmount() {
+    const bal = (typeof currentBalance === 'number' && currentBalance > 0) ? currentBalance
+              : (typeof accountBalance === 'number' && accountBalance > 0) ? accountBalance : 0;
+    const base = (Number.isFinite(tradeAmount) && tradeAmount > 0) ? tradeAmount : (CFG.DEFAULT_AMOUNT || 1);
+    if (!CFG.RISK_PCT_ENABLED || bal <= 0) return _safeAmount(base);
+    const hi = (CFG.RISK_MAX_AMOUNT > 0) ? CFG.RISK_MAX_AMOUNT : base;   // المبلغ اليدوي = السقف
+    const lo = CFG.RISK_MIN_AMOUNT || 1;
+    let amt = bal * (CFG.RISK_PCT || 0.03);
+    amt = Math.min(Math.max(amt, lo), hi);
+    amt = Math.min(amt, Math.floor(bal));                                // لا يتجاوز الرصيد المتاح أبدًا
+    return _safeAmount(Math.max(1, amt));
+  }
   function _rebuildPayloadCache() {
     const a = activeAsset || '';
     // ✅ [FIX] استخدم المدة الذكية إن توفرت، وإلا مدة المنصة
     //   المدة الذكية تُحسب بناءً على نوع النمط وقوة الإشارة
     const dur = _lastSmartDurSec >= _durationFloor() ? _lastSmartDurSec : (_tradeDuration > 0 ? _tradeDuration : (candlePeriod || 10));
     const t = _snapTradeDuration(dur);
-    const amt = tradeAmount;
+    const amt = _sizedAmount();   // [V27] مبلغ مُحجَّم نسبةً للرصيد بدل القيمة الثابتة
     const d = isDemo;
     _payloadCache.prefixCall = '42["openOrder",{"asset":"'+a+'","amount":'+amt+',"action":"call","isDemo":'+d+',"requestId":';
     _payloadCache.suffixCall = ',"optionType":100,"time":'+t+'}]';
@@ -5588,6 +5613,13 @@
       //   (السرعة + العجلة/الاستنفاد + فلتر الارتداد المصغّر) قبل الإرسال، تمامًا
       //   كأنماط الشموع. _executeDualTrade يتولّى الحمولة والمدة وتسجيل LAB.
       if (autoTrade) {
+        // ✅ [V27] حارس الشات/الأوراكل — كان يعيش في _processSignal فقط، فتجاوزه PULSE.
+        //   الأدلة: كل صفقة عاكست الشات (SELL) خسرت. نحجب المعاكس قبل ETE.
+        const _orc = oracleAgrees(dir, a);
+        if (!_orc.agree) {
+          addLog('🔮 [PULSE-ORACLE-VETO] ' + dir + ' مرفوض — الأوراكل ' + (_orc.oracleDir || '') + ' (' + _orc.reason + ')', 'info');
+          return;
+        }
         _currentIntervalSignal = false;   // PULSE ليس إشارة فاصل → يخضع لـ ETE كاملًا
         _timedExecute(dir, a, _safeAmount(tradeAmount), 1);
       } else {
@@ -6287,8 +6319,10 @@
       // العجلة (المشتقة الثانية): نحسبها مرة ونستخدمها للاستنفاد + لتمييز القفزة الحقيقية من الكاذبة.
       const ac = CFG.ETE_ACCEL_ENABLED ? OracleLab.microAccel(a, CFG.ETE_ACCEL_MS) : null;
       const accelReliable = ac && (ac.ticks || 0) >= CFG.ETE_ACCEL_MIN_TICKS;
-      // ② الاستنفاد: السرعة موافقة لكن العجلة تعاكس بقوة (الزخم يموت) → لا تدخل القمة/القاع المنهك
-      if (accelReliable && ac.accel * sign <= -CFG.ETE_ACCEL_DECEL_REL) {
+      // ② الاستنفاد: السرعة موافقة لكن العجلة تعاكس (الزخم يموت) → لا تدخل القمة/القاع المنهك.
+      //   ✅ [V27] عتبة أصرم (ETE_DECEL_HARD_REL): تباطؤ أخف يكفي لرفض الدخول — يحجب شراء القمة.
+      const _decelRel = Math.min(CFG.ETE_ACCEL_DECEL_REL, (CFG.ETE_DECEL_HARD_REL || CFG.ETE_ACCEL_DECEL_REL));
+      if (accelReliable && ac.accel * sign <= -_decelRel) {
         return { ok: false, reason: 'تباطؤ✗ (استنفاد)', sl, accel: ac };
       }
       // ③ فلتر الارتداد المصغّر: قفزة حادة طازجة *منبثقة من قاعدة غير موافقة* = فخ ارتداد.
@@ -6296,7 +6330,10 @@
       if (CFG.ETE_RETRACE_ENABLED) {
         const sp = OracleLab.lastSpike(a, CFG.ETE_RETRACE_MS);
         const baseAligned = accelReliable && ac.v1 * sign > 0;   // النصف الأقدم يتحرّك معنا أصلاً
-        if (sp && sp.rel * sign >= CFG.ETE_RETRACE_REL && !baseAligned) {
+        // ✅ [V27] قفزة حادة جدًا (≥ ETE_RETRACE_HARD_REL) تنتظر ارتدادًا دائمًا — حتى لو الزخم متّسق
+        //   (الدخول على رأس قفزة كبيرة = شراء القمة، وهو ملف الخسائر في السوق المتذبذب).
+        const _hardSpike = sp && sp.rel * sign >= (CFG.ETE_RETRACE_HARD_REL || Infinity);
+        if (sp && sp.rel * sign >= CFG.ETE_RETRACE_REL && (!baseAligned || _hardSpike)) {
           return { ok: false, reason: 'قفزة—انتظار ارتداد', sl, spike: sp };
         }
       }
@@ -6371,8 +6408,7 @@
       }
       if (_shouldBlockSend(direction, asset)) { _currentIntervalSignal = false; return; }   // ✅ [FIX-A/C]
       const action = direction === 'BUY' ? 'call' : 'put';
-      const amt = overrideAmount || tradeAmount;
-      const safeAmt = _safeAmount(amt);
+      const safeAmt = _sizedAmount();   // [V27] مبلغ مُحجَّم نسبةً للرصيد (نفس قيمة الحمولة)
       // ✅ [FIX] استخدم المدة الذكية (_lastSmartDurSec) بدل مدة المنصة
       //   المدة الذكية تُحسب بناءً على نوع النمط وقوة الإشارة
       //   إذا لم تتوفر مدة ذكية، نستخدم مدة المنصة كاحتياطي
