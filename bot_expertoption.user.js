@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🛰️ EXPERTOPTION_ENGINE — WS Interceptor + Protocol Decoder + Trade Engine + Risk Guard + Signal Orb
 // @namespace    expertoption-trade-engine
-// @version      1.2.0
+// @version      1.3.0
 // @description  ExpertOption trading bot — intercepts the native JSON WebSocket protocol (candles / profile / trade lifecycle), tracks ticks·balance·active-asset, runs an adaptive signal engine, protects capital (% risk sizing, daily drawdown, loss-streak pause/halt), executes trades via the verified buyOption format, and shows a draggable panel + liquid-glass signal orb.
 // @author       aoirusra
 // @match        *://expertoption.com/*
@@ -35,7 +35,7 @@
     UI_ENABLED        : true,
     POPUP_ENABLED     : true,
     DEFAULT_AMOUNT    : 1,
-    DEFAULT_EXP_SHIFT : 60,           // seconds — default option expiration
+    DEFAULT_EXP_SHIFT : 10,           // seconds — default option expiration (platform allows 5,6,7,8,9,10,…)
 
     TRADE_HOST_HINTS  : ['expertoption.com', 'expertoption.finance'],
 
@@ -576,7 +576,9 @@
         if (/amount|sum|invest|bet/i.test(k) && typeof v === 'number') message[k] = amount;
         else if (/asset/i.test(k)) message[k] = assetId;
         else if (/is_?demo|^demo$/i.test(k)) message[k] = isDemo;
-        else if (/strike_?time|exp_?time|expire|^time$/i.test(k) && typeof v === 'number' && v > 1e9) message[k] = nowSec();
+        else if (/exp_?time/i.test(k) && typeof v === 'number' && v > 1e9) message[k] = nowSec() + expSeconds;   // absolute expiry = now + duration
+        else if (/strike_?time|^time$/i.test(k) && typeof v === 'number' && v > 1e9) message[k] = nowSec();        // strike anchored to now
+        else if (/expiration_?shift|exp_?shift|^period$|^duration$|expiry/i.test(k) && typeof v === 'number') message[k] = expSeconds;  // relative duration → honor the picker
       }
     } else {
       // fallback format (used until the bot has seen one manual trade to learn from)
@@ -743,6 +745,8 @@
   .cb-dur-lbl{font-size:10px;color:#9fb2c0;flex-shrink:0;font-weight:600;}
   .cb-dur-btn{padding:5px 9px;border-radius:16px;border:1px solid #243443;background:#16222e;color:#9fb2c0;font-family:inherit;font-size:10px;font-weight:700;cursor:pointer;transition:all 0.15s;}
   .cb-dur-btn.active{background:#0f2a1c;border-color:#46d98e;color:#46d98e;}
+  .cb-dur-inp{width:46px;background:#16222e;border:1px solid #243443;border-radius:10px;padding:4px 6px;color:#46d98e;font-family:'SF Mono',ui-monospace,monospace;font-size:11px;font-weight:700;text-align:center;outline:none;}
+  .cb-dur-inp:focus{border-color:#46d98e;}
   .cb-reset-btn{padding:8px;border-radius:12px;border:1px solid #243443;background:#16222e;color:#9fb2c0;font-family:inherit;font-size:9.5px;font-weight:600;cursor:pointer;text-align:center;transition:all 0.15s;}
   .cb-reset-btn:hover{background:#2a1416;border-color:#FCA5A5;color:#DC2626;}
   #cbStatus{padding:7px 14px 9px;font-size:8px;font-weight:700;font-family:'SF Mono',ui-monospace,monospace;border-top:1px solid #243443;letter-spacing:0.5px;flex-shrink:0;background:#0e1a16;border-radius:0 0 20px 20px;text-align:center;background-image:linear-gradient(90deg,#00d264,#3fe0ff,#9b8cff,#00d264);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:cbGradFlow 7s linear infinite;}
@@ -862,12 +866,13 @@
         <span class="cb-demo-badge" id="cbAccMode">ديمو</span>
       </div>
       <div class="cb-dur-row">
-        <span class="cb-dur-lbl">⏱ المدة</span>
-        <button class="cb-dur-btn" data-dur="30">30ث</button>
-        <button class="cb-dur-btn" data-dur="60">1د</button>
-        <button class="cb-dur-btn" data-dur="120">2د</button>
-        <button class="cb-dur-btn" data-dur="180">3د</button>
-        <button class="cb-dur-btn" data-dur="300">5د</button>
+        <span class="cb-dur-lbl">⏱ المدة (ث)</span>
+        <button class="cb-dur-btn" data-dur="5">5</button>
+        <button class="cb-dur-btn" data-dur="10">10</button>
+        <button class="cb-dur-btn" data-dur="15">15</button>
+        <button class="cb-dur-btn" data-dur="30">30</button>
+        <button class="cb-dur-btn" data-dur="60">60</button>
+        <input type="number" class="cb-dur-inp" id="cbDurInp" min="1" step="1" value="10" title="مدة مخصّصة بالثواني">
       </div>
       <div class="cb-manual-row">
         <button class="cb-manual-btn buy"  id="cbManualBuy">↑ شراء</button>
@@ -977,6 +982,7 @@
   function setDuration(sec) {
     expShift = sec;
     document.querySelectorAll('.cb-dur-btn').forEach(b => b.classList.toggle('active', +b.dataset.dur === sec));
+    const inp = $('cbDurInp'); if (inp && +inp.value !== sec) inp.value = sec;
   }
 
   function makeDrag(handle, target) {
@@ -1035,6 +1041,8 @@
     cs.addEventListener('input', () => { minConfidence = parseInt(cs.value, 10); csv.textContent = minConfidence + '%'; });
     $('cbPopupToggle').addEventListener('change', (e) => { CFG.POPUP_ENABLED = e.target.checked; $('cbPopupBadge').textContent = e.target.checked ? 'ON' : 'OFF'; $('cbPopupBadge').style.color = e.target.checked ? '#00d264' : '#7c8d9b'; });
     document.querySelectorAll('.cb-dur-btn').forEach(b => b.addEventListener('click', () => { setDuration(+b.dataset.dur); addLog('⏱️ duration: ' + b.dataset.dur + 's', 'info'); }));
+    const durInp = $('cbDurInp');
+    if (durInp) durInp.addEventListener('change', () => { const v = parseInt(durInp.value, 10); if (v >= 1) { setDuration(v); addLog('⏱️ duration: ' + v + 's (custom)', 'info'); } });
     setDuration(expShift);
     $('cbResetStats').addEventListener('click', () => { STATS.trades = STATS.wins = STATS.losses = STATS.lossStreak = STATS.winStreak = STATS.bestStreak = 0; STATS.pnl = 0; BOT.trades = BOT.wins = BOT.losses = BOT.lossStreak = BOT.winStreak = 0; BOT.pnl = 0; _pauseUntil = 0; addLog('🔄 stats reset', 'info'); });
     $('cbResumeRisk').addEventListener('click', () => RiskManager.resume());
