@@ -82,6 +82,7 @@
   let wsConnected     = false;
   let totalFrames     = 0;
   let totalTicks      = 0;
+  let _lastTickMs     = 0;            // وقت آخر سعر مُلتقَط — لمؤشر الحيوية/الركود
   let balanceDemo     = null;
   let balanceReal     = null;
   let isDemo          = 1;
@@ -189,9 +190,9 @@
     if (activeAssetId == null) activeAssetId = aid;
     for (const c of m.candles) {
       let price = null;
-      if (c.tf === 0 && Array.isArray(c.v) && c.v.length) price = c.v[0];           // tick
-      else if (Array.isArray(c.v) && c.v.length >= 4) price = c.v[3];               // close شمعة
-      if (price > 0) { totalTicks++; _lastPrice.set(aid, price); }
+      if (c.tf === 0 && Array.isArray(c.v) && c.v.length) { price = c.v[0]; activeAssetId = aid; }  // tick = الأصل المعروض حالياً
+      else if (Array.isArray(c.v) && c.v.length >= 4) price = c.v[3];                                // إغلاق الشمعة (عند أطر زمنية أكبر)
+      if (price > 0) { totalTicks++; _lastPrice.set(aid, price); _lastTickMs = nowMs(); }
     }
   }
 
@@ -443,13 +444,17 @@
     const sent = tc ? ('▲' + tc.call + '% / ▼' + tc.put + '%') : (s ? ('▲' + s.call + ' / ▼' + s.put) : '—');
     const price = activeAssetId != null ? _lastPrice.get(activeAssetId) : null;
     const asset = activeAssetId != null ? _assetsById.get(activeAssetId) : null;
+    const ageMs = _lastTickMs ? (nowMs() - _lastTickMs) : null;
+    const ageSec = ageMs != null ? Math.round(ageMs / 1000) : null;
+    const live = ageMs == null ? '⚪ بانتظار البث' : (ageMs < 3000 ? '🟢 حيّ' : (ageMs < 10000 ? '🟡 بطيء ' + ageSec + 'ث' : '🔴 ركود ' + ageSec + 'ث'));
     _hudEl.innerHTML =
       '<b style="color:#33ddaa">EO-SPY v0.3</b> ' + (wsConnected ? '🟢' : '🔴') +
       ' | <b>' + (activeAssetId != null ? symOf(activeAssetId) : '—') + '</b>' +
       ' @ <b>' + (price != null ? price.toFixed(asset?.digits || 4) : '—') + '</b>' +
       ' | ربح ' + (asset?.profit ?? '—') + '%' +
       ' | جمهور ' + sent +
-      '<br><span style="color:#9ab;font-size:10px">رصيد: <b>' + (curBalance() ?? '—') + '</b> (' + (isDemo ? 'تجريبي' : 'حقيقي') + ')' +
+      '<br><span style="color:#9ab;font-size:10px">' + live +
+      ' | رصيد: <b>' + (curBalance() ?? '—') + '</b> (' + (isDemo ? 'تجريبي' : 'حقيقي') + ')' +
       ' | ticks ' + totalTicks + ' | إطارات ' + totalFrames + ' | مفتوحة ' + _openTrades.size + ' | أصول ' + _assetsById.size + '</span>';
   }
   function mkBtn(txt, fn, title) { const b = document.createElement('button'); b.textContent = txt; if (title) b.title = title; b.style.cssText = 'flex:0 0 auto;padding:3px 8px;font:11px sans-serif;background:#1a1a33;color:#cce;border:1px solid #33335a;border-radius:4px;cursor:pointer'; b.onclick = fn; return b; }
@@ -523,6 +528,7 @@
     tabs.append(
       mkBtn('▲ CALL', () => executeTrade('call'), 'فتح صفقة صعود'),
       mkBtn('▼ PUT', () => executeTrade('put'), 'فتح صفقة هبوط'),
+      mkBtn('📈 شموع', () => { const i = CFG.LOG_MUTE_ACTIONS.indexOf('candles'); if (i >= 0) { CFG.LOG_MUTE_ACTIONS.splice(i, 1); addLog('📈 إظهار بث الشموع في السجل — لتأكيد الحيوية', 'info'); } else { CFG.LOG_MUTE_ACTIONS.push('candles'); addLog('📉 كتم بث الشموع', 'info'); } }, 'إظهار/كتم بث الأسعار في السجل'),
       mkBtn('📋 ملخص', () => { navigator.clipboard?.writeText(JSON.stringify({ byAction: Diag.counts.byAction, byMethod: Diag.counts.byMethod, decodeStats: _decodeStats }, null, 2)); addLog('📋 نُسخ الملخص', 'info'); }),
       mkBtn('⬇️ تصدير', () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([Diag.export()], { type: 'application/json' })); a.download = 'eo_traffic_' + Date.now() + '.json'; a.click(); addLog('⬇️ صُدّر ' + Diag.packets.length + ' حزمة', 'info'); }),
       mkBtn('🗑️ مسح', () => { Diag.clear(); if (_rawEl) _rawEl.innerHTML = ''; addLog('🗑️ مُسح', 'info'); }),
