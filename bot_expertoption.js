@@ -58,6 +58,27 @@
     },
     // خريطة النوع الرقمي في كائنات النتائج: 0=call (شراء/صعود)، 1=put (بيع/هبوط)
     TYPE_CALL: 0, TYPE_PUT: 1,
+
+    // ─── إعدادات الإستراتيجية / محرك الإشارة ───
+    STRATEGY: {
+      SERIES_MAX     : 240,   // أقصى عدد نقاط سعر محفوظة لكل أصل
+      MIN_POINTS     : 24,    // أقل عدد نقاط قبل توليد إشارة
+      EMA_FAST       : 5,
+      EMA_SLOW       : 20,
+      RSI_PERIOD     : 14,
+      RSI_OS         : 30,    // ذروة بيع → إشارة صعود (call)
+      RSI_OB         : 70,    // ذروة شراء → إشارة هبوط (put)
+      ROC_LOOKBACK   : 6,     // نقاط الزخم
+      // أوزان مصادر الإشارة (مجموع الثقة 0-100)
+      W_TREND        : 40,    // تقاطع EMA
+      W_RSI          : 30,    // RSI
+      W_MOMENTUM     : 20,    // زخم السعر
+      W_CROWD        : 10,    // مؤشر الجمهور (تتبّع الأغلبية)
+      CROWD_FOLLOW   : true,  // true=مع الأغلبية، false=عكسي
+      MIN_CONFIDENCE : 55,    // حد الثقة لإطلاق صفقة آلية (المحرك متحفّظ؛ نادراً يتجاوز ~60 على الأصول الهادئة)
+      COOLDOWN_MS    : 8000,  // فترة تهدئة بين الصفقات الآلية
+      ONE_TRADE      : true,  // لا تفتح صفقة جديدة قبل إغلاق الحالية
+    },
   };
 
   // ══════════════════════════════════════════════════════════════════════
@@ -98,6 +119,17 @@
   const _openTrades   = new Map();   // tradeId → trade
   const _sentiment    = new Map();   // assetId → { call, put, ts }  (من CROWD_FEED)
   const _tradersChoice = new Map();  // assetId → { put, call }  (مؤشر المنصة الرسمي %)
+  const _series       = new Map();   // assetId → [ price, ... ]  (سلسلة أسعار دوّارة)
+
+  // ─── حالة الإشارة / التداول الآلي ───
+  let autoTrade       = false;       // وضع التداول الآلي
+  let minConfidence   = CFG.STRATEGY.MIN_CONFIDENCE;
+  let _lastSignal     = { dir: null, conf: 0, reasons: [] };
+  let _lastAutoTradeMs = 0;
+  const _botNs        = new Set();    // ns لصفقات أرسلها البوت/المستخدم عبر الأداة
+  const _botTradeIds  = new Set();    // tradeId المؤكدة كصفقات البوت
+  const _stats        = { trades: 0, wins: 0, losses: 0, pnl: 0 };       // كل الصفقات
+  const _botStats     = { trades: 0, wins: 0, losses: 0, pnl: 0 };       // صفقات البوت فقط
 
   function symOf(id) { const a = _assetsById.get(id); return a ? a.symbol : ('#' + id); }
   function curBalance() { return isDemo ? balanceDemo : balanceReal; }
@@ -192,7 +224,11 @@
       let price = null;
       if (c.tf === 0 && Array.isArray(c.v) && c.v.length) { price = c.v[0]; activeAssetId = aid; }  // tick = الأصل المعروض حالياً
       else if (Array.isArray(c.v) && c.v.length >= 4) price = c.v[3];                                // إغلاق الشمعة (عند أطر زمنية أكبر)
-      if (price > 0) { totalTicks++; _lastPrice.set(aid, price); _lastTickMs = nowMs(); }
+      if (price > 0) {
+        totalTicks++; _lastPrice.set(aid, price); _lastTickMs = nowMs();
+        let ser = _series.get(aid); if (!ser) { ser = []; _series.set(aid, ser); }
+        ser.push(price); if (ser.length > CFG.STRATEGY.SERIES_MAX) ser.shift();
+      }
     }
   }
 
@@ -230,8 +266,11 @@
     const trades = m?.trades || (m?.trade ? [m.trade] : []);
     for (const t of trades) {
       _openTrades.delete(t.id);
-      const win = (t.result_amount || 0) > 0;
-      addLog((win ? '✅ ربح' : '❌ خسارة') + ' #' + t.id + ' | ' + symOf(t.asset_id) + ' | خروج ' + t.close_rate + ' | نتيجة $' + t.result_amount, win ? 'signal' : 'error');
+      const res = t.result_amount || 0, win = res > 0;
+      _stats.trades++; _stats.pnl += res; win ? _stats.wins++ : _stats.losses++;
+      const isBot = _botTradeIds.has(t.id);
+      if (isBot) { _botStats.trades++; _botStats.pnl += res; win ? _botStats.wins++ : _botStats.losses++; _botTradeIds.delete(t.id); }
+      addLog((win ? '✅ ربح' : '❌ خسارة') + (isBot ? ' 🤖' : '') + ' #' + t.id + ' | ' + symOf(t.asset_id) + ' | خروج ' + t.close_rate + ' | نتيجة $' + res, win ? 'signal' : 'error');
     }
   }
 
@@ -268,7 +307,12 @@
       case CFG.A.OPEN_OK:      onOpenOk(message); break;
       case CFG.A.CLOSE_OK:     onCloseOk(message); break;
       case CFG.A.CROWD_FEED:   onCrowdFeed(message); break;
-      case CFG.A.BUY_RESP:     if (message?.trade_id) addLog('📨 تأكيد شراء — trade_id ' + message.trade_id, 'info'); break;
+      case CFG.A.BUY_RESP:
+        if (message?.trade_id) {
+          if (fullMsg && _botNs.has(fullMsg.ns)) { _botTradeIds.add(message.trade_id); _botNs.delete(fullMsg.ns); }  // ربط صفقة البوت بـ ns
+          addLog('📨 تأكيد شراء — trade_id ' + message.trade_id, 'info');
+        }
+        break;
       default: break;
     }
   }
@@ -276,7 +320,101 @@
   function processDecoded(decoded) {
     if (!decoded || typeof decoded !== 'object') return;
     const actions = flattenActions(decoded);
-    for (const a of actions) dispatch(a.action, a.message ?? a, a.token ? a : decoded);
+    for (const a of actions) dispatch(a.action, a.message ?? a, a);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 6.5  SIGNAL ENGINE + STRATEGY
+  // ══════════════════════════════════════════════════════════════════════
+  function ema(values, period) {
+    if (!values.length) return null;
+    const k = 2 / (period + 1);
+    let e = values[0];
+    for (let i = 1; i < values.length; i++) e = values[i] * k + e * (1 - k);
+    return e;
+  }
+  function rsi(values, period) {
+    if (values.length <= period) return null;
+    let gain = 0, loss = 0;
+    for (let i = values.length - period; i < values.length; i++) {
+      const d = values[i] - values[i - 1];
+      if (d >= 0) gain += d; else loss -= d;
+    }
+    if (loss === 0) return 100;
+    const rs = (gain / period) / (loss / period);
+    return 100 - 100 / (1 + rs);
+  }
+
+  // يولّد إشارة { dir:'call'|'put'|null, conf:0-100, reasons:[] } للأصل النشط
+  function computeSignal(assetId) {
+    const S = CFG.STRATEGY;
+    const ser = _series.get(assetId);
+    if (!ser || ser.length < S.MIN_POINTS) return { dir: null, conf: 0, reasons: ['نقاط غير كافية'] };
+
+    let callScore = 0, putScore = 0;
+    const reasons = [];
+    // كل مؤشر يصوّت باتجاه بقوة 0..1 ثم يُضرب بوزنه. أرضية القوة تضمن مساهمة
+    // معقولة عند وضوح الاتجاه حتى لو كان السعر هادئاً (وإلا لن تتجاوز الثقة 30%).
+
+    // 1) الاتجاه — تقاطع EMA
+    const eF = ema(ser.slice(-S.EMA_SLOW * 2), S.EMA_FAST);
+    const eS = ema(ser.slice(-S.EMA_SLOW * 2), S.EMA_SLOW);
+    if (eF != null && eS != null && eF !== eS) {
+      const diff = Math.abs(eF - eS) / eS;
+      const strength = 0.5 + 0.5 * Math.min(1, diff / 0.0006);
+      if (eF > eS) { callScore += strength * S.W_TREND; reasons.push('اتجاه صاعد'); }
+      else { putScore += strength * S.W_TREND; reasons.push('اتجاه هابط'); }
+    }
+
+    // 2) RSI — ذروات قوية + ميل خفيف حول 50
+    const r = rsi(ser, S.RSI_PERIOD);
+    if (r != null) {
+      if (r <= S.RSI_OS) { callScore += S.W_RSI * (0.6 + 0.4 * (S.RSI_OS - r) / S.RSI_OS); reasons.push('RSI ذروة بيع ' + r.toFixed(0)); }
+      else if (r >= S.RSI_OB) { putScore += S.W_RSI * (0.6 + 0.4 * (r - S.RSI_OB) / (100 - S.RSI_OB)); reasons.push('RSI ذروة شراء ' + r.toFixed(0)); }
+      else { const lean = (r - 50) / 50; const w = Math.abs(lean) * 0.5 * S.W_RSI; if (lean < 0) callScore += w; else putScore += w; }
+    }
+
+    // 3) الزخم — تغيّر السعر عبر آخر ROC_LOOKBACK نقاط
+    if (ser.length > S.ROC_LOOKBACK) {
+      const base = ser[ser.length - 1 - S.ROC_LOOKBACK];
+      const roc = base ? (ser[ser.length - 1] - base) / base : 0;
+      if (roc !== 0) {
+        const strength = 0.4 + 0.6 * Math.min(1, Math.abs(roc) / 0.0006);
+        if (roc > 0) { callScore += strength * S.W_MOMENTUM; reasons.push('زخم صاعد'); }
+        else { putScore += strength * S.W_MOMENTUM; reasons.push('زخم هابط'); }
+      }
+    }
+
+    // 4) مؤشر الجمهور الرسمي
+    const tc = _tradersChoice.get(assetId);
+    if (tc) {
+      const lean = (tc.call - tc.put) / 100;  // +ve = الأغلبية call
+      if (Math.abs(lean) > 0.05) {
+        const dirCall = S.CROWD_FOLLOW ? lean > 0 : lean < 0;
+        const w = Math.min(1, Math.abs(lean) * 3) * S.W_CROWD;
+        if (dirCall) { callScore += w; reasons.push('جمهور ' + (S.CROWD_FOLLOW ? 'مع' : 'عكس') + ' call'); }
+        else { putScore += w; reasons.push('جمهور ' + (S.CROWD_FOLLOW ? 'مع' : 'عكس') + ' put'); }
+      }
+    }
+
+    const dir = callScore === putScore ? null : (callScore > putScore ? 'call' : 'put');
+    const conf = Math.round(Math.min(100, Math.max(callScore, putScore)));
+    return { dir, conf, reasons, callScore: Math.round(callScore), putScore: Math.round(putScore) };
+  }
+
+  // حلقة التقييم: تحدّث الإشارة وتطلق صفقة آلية عند توفر الشروط
+  function evaluateStrategy() {
+    if (activeAssetId == null) return;
+    _lastSignal = computeSignal(activeAssetId);
+    if (!autoTrade || !_lastSignal.dir) return;
+    const S = CFG.STRATEGY;
+    if (_lastSignal.conf < minConfidence) return;
+    if (S.ONE_TRADE && _openTrades.size > 0) return;
+    if (nowMs() - _lastAutoTradeMs < S.COOLDOWN_MS) return;
+    if (!tradeWS || tradeWS.readyState !== 1 || !ensureToken()) return;
+    _lastAutoTradeMs = nowMs();
+    addLog('🤖 إشارة آلية: ' + (_lastSignal.dir === 'put' ? 'PUT▼' : 'CALL▲') + ' ثقة ' + _lastSignal.conf + '% — ' + _lastSignal.reasons.join('، '), 'signal');
+    executeTrade(_lastSignal.dir, activeAssetId, tradeAmount, expShift);
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -384,7 +522,7 @@
   // ══════════════════════════════════════════════════════════════════════
   // § 9  TRADE ENGINE (صيغة buyOption المؤكدة)
   // ══════════════════════════════════════════════════════════════════════
-  function buildOpenPayload(direction, assetId, amount, expSeconds) {
+  function buildOpenPayload(direction, assetId, amount, expSeconds, ns) {
     return JSON.stringify({
       action: 'buyOption',
       message: {
@@ -397,7 +535,7 @@
         ratePosition    : 0,
       },
       token: lastToken,
-      ns   : nextNs(),
+      ns   : ns != null ? ns : nextNs(),
     });
   }
 
@@ -430,10 +568,12 @@
     if (!tradeWS || tradeWS.readyState !== 1) { addLog('⚠️ لا مقبس تداول مفتوح (state=' + (tradeWS ? tradeWS.readyState : 'null') + ')', 'error'); return false; }
     if (!ensureToken()) { addLog('⚠️ تعذّر إيجاد token — غيّر الأصل أو الإطار الزمني مرة واحدة لالتقاطه', 'error'); return false; }
     const amt = amount || tradeAmount, exp = expSeconds || expShift;
-    const payload = buildOpenPayload(direction, aid, amt, exp);
+    const ns = nextNs();
+    _botNs.add(ns);   // لتتبّع نتيجة هذه الصفقة كصفقة بوت
+    const payload = buildOpenPayload(direction, aid, amt, exp, ns);
     try {
       tradeWS.send(new TextEncoder().encode(payload));      // عبر الهوك → يُسجَّل في الـ traffic للتحقق
-      addLog('⚡ أُرسلت: ' + (direction === 'put' ? 'PUT▼' : 'CALL▲') + ' | ' + symOf(aid) + ' | $' + amt + ' | ' + exp + 'ث | token✓ | ns=' + (_nsCounter - 1), 'signal');
+      addLog('⚡ أُرسلت: ' + (direction === 'put' ? 'PUT▼' : 'CALL▲') + ' | ' + symOf(aid) + ' | $' + amt + ' | ' + exp + 'ث | token✓ | ns=' + ns, 'signal');
       return true;
     } catch (e) { addLog('❌ فشل الإرسال: ' + e.message, 'error'); return false; }
   }
@@ -441,7 +581,7 @@
   // ══════════════════════════════════════════════════════════════════════
   // § 10  UI — Spy Panel
   // ══════════════════════════════════════════════════════════════════════
-  let _ui = null, _body = null, _logEl = null, _rawEl = null, _hudEl = null, _restoreBtn = null;
+  let _ui = null, _body = null, _logEl = null, _rawEl = null, _hudEl = null, _sigEl = null, _restoreBtn = null, _autoBtn = null;
   const LS_KEY = 'eo_spy_ui_v1';
   let _uiState = { left: null, top: null, w: 520, h: null, collapsed: false, hidden: false, opacity: 1 };
   function loadUIState() { try { Object.assign(_uiState, JSON.parse(W.localStorage.getItem(LS_KEY)) || {}); } catch (_) {} }
@@ -486,6 +626,20 @@
       ' | token ' + (lastToken ? '🔑' : '❌') +
       ' | مقبس ' + (tradeWS && tradeWS.readyState === 1 ? '✓' : '✗') +
       ' | ticks ' + totalTicks + ' | مفتوحة ' + _openTrades.size + '</span>';
+    renderSignal();
+  }
+  function renderSignal() {
+    if (!_sigEl) return;
+    const sg = _lastSignal || { dir: null, conf: 0, reasons: [] };
+    const arrow = sg.dir === 'call' ? '<span style="color:#33dd88">▲ CALL</span>' : sg.dir === 'put' ? '<span style="color:#ff5577">▼ PUT</span>' : '<span style="color:#778">— محايد</span>';
+    const bar = sg.conf >= minConfidence ? '#33dd88' : '#667';
+    const wr = (st) => st.trades ? Math.round(st.wins / st.trades * 100) + '%' : '—';
+    _sigEl.innerHTML =
+      '🧭 إشارة: ' + arrow + ' <b style="color:' + bar + '">' + sg.conf + '%</b>' +
+      ' <span style="color:#778;font-size:10px">(حد ' + minConfidence + '%)</span>' +
+      (sg.reasons && sg.reasons.length ? ' <span style="color:#9ab;font-size:10px">— ' + sg.reasons.join('، ') + '</span>' : '') +
+      '<br><span style="color:#9ab;font-size:10px">📊 بوت: ' + _botStats.trades + ' صفقة | فوز ' + wr(_botStats) + ' (' + _botStats.wins + 'W/' + _botStats.losses + 'L) | ربح/خسارة $' + _botStats.pnl.toFixed(2) +
+      '  •  الكل: ' + _stats.trades + ' | فوز ' + wr(_stats) + '</span>';
   }
   function mkBtn(txt, fn, title) { const b = document.createElement('button'); b.textContent = txt; if (title) b.title = title; b.style.cssText = 'flex:0 0 auto;padding:3px 8px;font:11px sans-serif;background:#1a1a33;color:#cce;border:1px solid #33335a;border-radius:4px;cursor:pointer'; b.onclick = fn; return b; }
   function mkWinBtn(txt, fn, title) { const b = document.createElement('button'); b.textContent = txt; b.title = title || ''; b.style.cssText = 'width:22px;height:22px;padding:0;font:12px sans-serif;background:#23234a;color:#cce;border:1px solid #3a3a66;border-radius:4px;cursor:pointer;line-height:1'; b.onclick = (e) => { e.stopPropagation(); fn(); }; return b; }
@@ -564,10 +718,33 @@
       mkBtn('🗑️ مسح', () => { Diag.clear(); if (_rawEl) _rawEl.innerHTML = ''; addLog('🗑️ مُسح', 'info'); }),
     );
 
+    // ─── صف التحكم: مبلغ + مدة + ثقة + تداول آلي ───
+    const ctrlRow = document.createElement('div'); ctrlRow.style.cssText = 'flex:0 0 auto;display:flex;gap:6px;align-items:center;padding:4px 6px;border-bottom:1px solid #2a2a44;background:#0f0f22;flex-wrap:wrap;font:11px sans-serif;color:#9ab';
+    const mkNum = (label, val, fn, w) => { const wrap = document.createElement('label'); wrap.style.cssText = 'display:flex;align-items:center;gap:3px'; const inp = document.createElement('input'); inp.type = 'number'; inp.value = val; inp.min = '1'; inp.style.cssText = 'width:' + (w || 46) + 'px;background:#1a1a33;color:#cce;border:1px solid #33335a;border-radius:4px;padding:2px 4px;font:11px monospace'; inp.onchange = () => fn(parseFloat(inp.value)); wrap.append(document.createTextNode(label), inp); return wrap; };
+    ctrlRow.append(
+      mkNum('💵', tradeAmount, v => { if (v > 0) { tradeAmount = v; addLog('💵 المبلغ: $' + v, 'info'); } }),
+      mkNum('⏱️', expShift, v => { if (v > 0) { expShift = v; addLog('⏱️ المدة: ' + v + 'ث', 'info'); } }),
+    );
+    const confWrap = document.createElement('label'); confWrap.style.cssText = 'display:flex;align-items:center;gap:4px;flex:1 1 120px';
+    const confSlider = document.createElement('input'); confSlider.type = 'range'; confSlider.min = '40'; confSlider.max = '90'; confSlider.value = String(minConfidence); confSlider.style.cssText = 'flex:1';
+    const confVal = document.createElement('span'); confVal.textContent = minConfidence + '%'; confVal.style.cssText = 'font:11px monospace;color:#cce;min-width:34px';
+    confSlider.oninput = () => { minConfidence = parseInt(confSlider.value, 10); confVal.textContent = minConfidence + '%'; };
+    confWrap.append(document.createTextNode('🎯'), confSlider, confVal);
+    _autoBtn = mkBtn('🤖 آلي: متوقف', () => {
+      autoTrade = !autoTrade;
+      _autoBtn.textContent = '🤖 آلي: ' + (autoTrade ? 'يعمل ✅' : 'متوقف');
+      _autoBtn.style.background = autoTrade ? '#1f4d2e' : '#1a1a33';
+      addLog(autoTrade ? '🤖 التداول الآلي يعمل — حد الثقة ' + minConfidence + '%' : '🤖 التداول الآلي متوقف', autoTrade ? 'signal' : 'info');
+    }, 'تشغيل/إيقاف التداول الآلي');
+    ctrlRow.append(confWrap, _autoBtn);
+
+    // ─── سطر الإشارة الحيّة ───
+    _sigEl = document.createElement('div'); _sigEl.style.cssText = 'flex:0 0 auto;padding:5px 8px;font:11px monospace;border-bottom:1px solid #2a2a44;background:#0c0c1c';
+
     const rawHdr = document.createElement('div'); rawHdr.style.cssText = 'flex:0 0 auto;padding:3px 8px;font:10px monospace;color:#778;background:#11111e;border-top:1px solid #2a2a44';
     rawHdr.textContent = '── RAW WS LOG (candles/ping مكتومة — مرّر للتفاصيل) ──';
 
-    _body.append(_hudEl, tabs, _logEl, rawHdr, _rawEl);
+    _body.append(_hudEl, _sigEl, ctrlRow, tabs, _logEl, rawHdr, _rawEl);
     _ui.append(bar, _body);
     document.documentElement.appendChild(_ui);
 
@@ -597,10 +774,13 @@
   if (document.readyState === 'loading') W.addEventListener('DOMContentLoaded', boot, { once: true }); else boot();
 
   setIntervalT(() => { ensureToken(); }, 3000);   // محاولة اكتشاف token دورياً حتى قبل أول صفقة
+  setIntervalT(evaluateStrategy, 1000);            // تقييم الإشارة/التداول الآلي كل ثانية
 
   W.__EO_SPY = {
-    CFG, Diag, executeTrade, binDecode, discoverToken, ensureToken,
+    CFG, Diag, executeTrade, binDecode, discoverToken, ensureToken, computeSignal,
     state: () => ({ activeAsset: activeAssetId != null ? symOf(activeAssetId) : null, assetId: activeAssetId, wsConnected, totalTicks, totalFrames, balance: curBalance(), isDemo, openTrades: _openTrades.size, assets: _assetsById.size, hasToken: !!lastToken, token: lastToken }),
+    signal: () => _lastSignal, stats: () => ({ all: _stats, bot: _botStats }),
+    setAuto: (on) => { autoTrade = !!on; }, setAmount: (v) => { tradeAmount = v; }, setExp: (v) => { expShift = v; }, setMinConf: (v) => { minConfidence = v; },
     assets: () => _assetsById, trades: () => _openTrades, sentiment: () => _sentiment, tradersChoice: () => _tradersChoice, price: (id) => _lastPrice.get(id ?? activeAssetId),
   };
   setIntervalT(updateHud, 1000);
