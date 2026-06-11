@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🛰️ EXPERTOPTION_ENGINE — WS Interceptor + Protocol Decoder + Trade Engine + Risk Guard + Signal Orb
 // @namespace    expertoption-trade-engine
-// @version      1.4.0
+// @version      1.5.0
 // @description  ExpertOption trading bot — intercepts the native JSON WebSocket protocol (candles / profile / trade lifecycle), tracks ticks·balance·active-asset, runs an adaptive signal engine, protects capital (% risk sizing, daily drawdown, loss-streak pause/halt), executes trades via the verified buyOption format, and shows a draggable panel + liquid-glass signal orb.
 // @author       aoirusra
 // @match        *://expertoption.com/*
@@ -84,18 +84,19 @@
       W_MOMENTUM     : 20,    // price-momentum weight
       W_CROWD        : 10,    // crowd indicator weight
       CROWD_FOLLOW   : true,  // true = trade with the majority, false = contrarian
-      MIN_CONFIDENCE : 60,    // confidence threshold to auto-fire
-      COOLDOWN_MS    : 8000,  // cooldown between auto trades
+      MIN_CONFIDENCE : 50,    // confidence threshold to auto-fire (signal is now volatility-adaptive)
+      COOLDOWN_MS    : 3000,  // cooldown between auto trades — short, to catch 5-10s setups
       ONE_TRADE      : true,  // don't open a new trade while one is open
 
-      // ─── protective filters (added after live-loss analysis) ───
-      VOL_FILTER     : true,  // 1) skip when the market is too flat (noise, not signal)
+      // ─── protective filters (master toggle below; thresholds tuned to real OTC volatility) ───
+      GUARDS_ENABLED : true,  // master switch for the four guards (UI toggle "🛡️ فلاتر")
+      VOL_FILTER     : true,  // 1) skip only when the market is essentially frozen
       VOL_LOOKBACK   : 20,    //    points used to measure recent range
-      VOL_MIN_RANGE_PCT : 0.0008,  // min (high-low)/price over the lookback to allow a trade (~8 pips on a 1.0000 quote)
-      ANTI_WHIPSAW   : true,  // 2) after a loss, don't re-fire the SAME direction until the signal flips or confirms
-      WHIPSAW_CONFIRM : 4,    //    new ticks the flipped/same signal must persist before re-firing
+      VOL_MIN_RANGE_PCT : 0.000002,  // min (high-low)/price; real OTC range ~0.000005, this blocks only dead-flat
+      ANTI_WHIPSAW   : true,  // 2) after a loss, don't re-fire the SAME direction until it flips or confirms
+      WHIPSAW_CONFIRM : 2,    //    new ticks the same signal must persist before re-firing
       RANGE_GUARD    : true,  // 3) no PUT near the range bottom, no CALL near the range top
-      RANGE_EDGE_PCT : 0.20,  //    treat the lowest/highest 20% of the recent range as the edge
+      RANGE_EDGE_PCT : 0.10,  //    treat the lowest/highest 10% of the recent range as the edge
       LOW_RISK_PCT   : 0.01,  // 4) use this lighter % for short expiries (see SHORT_EXP_SEC)
       SHORT_EXP_SEC  : 30,    //    expiries at/under this many seconds use LOW_RISK_PCT
     },
@@ -414,13 +415,17 @@
 
     let callScore = 0, putScore = 0;
     const reasons = [];
+    // scale everything by the asset's OWN recent volatility so quiet OTC indices
+    // (moves of ~0.0005%) score the same as busy forex pairs — absolute constants don't work.
+    const rgS = rangeStats(ser, S.VOL_LOOKBACK);
+    const scale = Math.max(rgS ? rgS.rangePct : 0, 1e-7);
 
-    // 1) trend — EMA crossover
+    // 1) trend — EMA crossover (strength relative to recent range)
     const eF = ema(ser.slice(-S.EMA_SLOW * 2), S.EMA_FAST);
     const eS = ema(ser.slice(-S.EMA_SLOW * 2), S.EMA_SLOW);
     if (eF != null && eS != null && eF !== eS) {
       const diff = Math.abs(eF - eS) / eS;
-      const strength = 0.5 + 0.5 * Math.min(1, diff / 0.0006);
+      const strength = 0.5 + 0.5 * Math.min(1, (diff / scale) * 2.5);
       if (eF > eS) { callScore += strength * S.W_TREND; reasons.push('uptrend'); }
       else { putScore += strength * S.W_TREND; reasons.push('downtrend'); }
     }
@@ -430,15 +435,15 @@
     if (r != null) {
       if (r <= S.RSI_OS) { callScore += S.W_RSI * (0.6 + 0.4 * (S.RSI_OS - r) / S.RSI_OS); reasons.push('RSI oversold ' + r.toFixed(0)); }
       else if (r >= S.RSI_OB) { putScore += S.W_RSI * (0.6 + 0.4 * (r - S.RSI_OB) / (100 - S.RSI_OB)); reasons.push('RSI overbought ' + r.toFixed(0)); }
-      else { const lean = (r - 50) / 50; const w = Math.abs(lean) * 0.5 * S.W_RSI; if (lean < 0) callScore += w; else putScore += w; }
+      else { const lean = (r - 50) / 50; const w = Math.abs(lean) * 0.6 * S.W_RSI; if (lean < 0) callScore += w; else putScore += w; }
     }
 
-    // 3) momentum — price change over the last ROC_LOOKBACK points
+    // 3) momentum — price change over the last ROC_LOOKBACK points (relative to recent range)
     if (ser.length > S.ROC_LOOKBACK) {
       const base = ser[ser.length - 1 - S.ROC_LOOKBACK];
       const roc = base ? (ser[ser.length - 1] - base) / base : 0;
       if (roc !== 0) {
-        const strength = 0.4 + 0.6 * Math.min(1, Math.abs(roc) / 0.0006);
+        const strength = 0.4 + 0.6 * Math.min(1, (Math.abs(roc) / scale) * 1.5);
         if (roc > 0) { callScore += strength * S.W_MOMENTUM; reasons.push('rising momentum'); }
         else { putScore += strength * S.W_MOMENTUM; reasons.push('falling momentum'); }
       }
@@ -477,6 +482,7 @@
   // auto-trade protective gates → { ok, reason } (manual trades bypass these)
   function autoTradeGuards(assetId, dir) {
     const S = CFG.STRATEGY;
+    if (!S.GUARDS_ENABLED) return { ok: true };
     const rs = rangeStats(_series.get(assetId), S.VOL_LOOKBACK);
     if (S.VOL_FILTER && rs && rs.rangePct < S.VOL_MIN_RANGE_PCT)
       return { ok: false, reason: 'flat market (range ' + (rs.rangePct * 100).toFixed(3) + '% < ' + (S.VOL_MIN_RANGE_PCT * 100).toFixed(3) + '%)' };
@@ -945,9 +951,14 @@
         <input type="checkbox" class="cb-toggle" id="cbRiskToggle">
         <span class="cb-auto-badge" id="cbRiskBadge2">ON</span>
       </div>
+      <div class="cb-auto-row" style="padding:2px 10px;">
+        <span class="cb-auto-lbl">🛡️ فلاتر الحماية (تقلّب/نطاق/تذبذب)</span>
+        <input type="checkbox" class="cb-toggle" id="cbGuardsToggle">
+        <span class="cb-auto-badge" id="cbGuardsBadge">ON</span>
+      </div>
       <div class="cb-conf-slider-row" style="display:flex;align-items:center;gap:6px;padding:4px 10px;">
         <span style="font-size:10px;color:#7c8d9b;min-width:58px;">🎯 ثقة ≥</span>
-        <input type="range" id="cbConfSlider" min="50" max="95" value="60" style="flex:1;accent-color:#00d264;height:4px;">
+        <input type="range" id="cbConfSlider" min="35" max="95" value="50" style="flex:1;accent-color:#00d264;height:4px;">
         <span style="font-size:11px;font-weight:700;color:#00d264;min-width:28px;text-align:right;" id="cbConfSliderVal">60%</span>
       </div>
       <div class="cb-auto-row" style="padding:2px 10px 4px;">
@@ -1093,6 +1104,9 @@
     $('cbRiskToggle').checked = CFG.RISK_PCT_ENABLED;
     $('cbRiskBadge2').textContent = CFG.RISK_PCT_ENABLED ? 'ON' : 'OFF';
     $('cbRiskToggle').addEventListener('change', (e) => { CFG.RISK_PCT_ENABLED = e.target.checked; $('cbRiskBadge2').textContent = e.target.checked ? 'ON' : 'OFF'; addLog('🛡️ risk sizing: ' + (e.target.checked ? 'ON (' + Math.round(CFG.RISK_PCT * 100) + '%)' : 'OFF (manual)'), 'info'); });
+    $('cbGuardsToggle').checked = CFG.STRATEGY.GUARDS_ENABLED;
+    $('cbGuardsBadge').textContent = CFG.STRATEGY.GUARDS_ENABLED ? 'ON' : 'OFF';
+    $('cbGuardsToggle').addEventListener('change', (e) => { CFG.STRATEGY.GUARDS_ENABLED = e.target.checked; $('cbGuardsBadge').textContent = e.target.checked ? 'ON' : 'OFF'; addLog('🛡️ protective filters: ' + (e.target.checked ? 'ON' : 'OFF — pure sniper mode'), 'info'); });
     const cs = $('cbConfSlider'), csv = $('cbConfSliderVal');
     cs.value = String(minConfidence); csv.textContent = minConfidence + '%';
     cs.addEventListener('input', () => { minConfidence = parseInt(cs.value, 10); csv.textContent = minConfidence + '%'; });
