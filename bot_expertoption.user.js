@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🛰️ EXPERTOPTION_ENGINE — WS Interceptor + Protocol Decoder + Trade Engine + Risk Guard + Signal Orb
 // @namespace    expertoption-trade-engine
-// @version      1.3.0
+// @version      1.4.0
 // @description  ExpertOption trading bot — intercepts the native JSON WebSocket protocol (candles / profile / trade lifecycle), tracks ticks·balance·active-asset, runs an adaptive signal engine, protects capital (% risk sizing, daily drawdown, loss-streak pause/halt), executes trades via the verified buyOption format, and shows a draggable panel + liquid-glass signal orb.
 // @author       aoirusra
 // @match        *://expertoption.com/*
@@ -87,6 +87,17 @@
       MIN_CONFIDENCE : 60,    // confidence threshold to auto-fire
       COOLDOWN_MS    : 8000,  // cooldown between auto trades
       ONE_TRADE      : true,  // don't open a new trade while one is open
+
+      // ─── protective filters (added after live-loss analysis) ───
+      VOL_FILTER     : true,  // 1) skip when the market is too flat (noise, not signal)
+      VOL_LOOKBACK   : 20,    //    points used to measure recent range
+      VOL_MIN_RANGE_PCT : 0.0008,  // min (high-low)/price over the lookback to allow a trade (~8 pips on a 1.0000 quote)
+      ANTI_WHIPSAW   : true,  // 2) after a loss, don't re-fire the SAME direction until the signal flips or confirms
+      WHIPSAW_CONFIRM : 4,    //    new ticks the flipped/same signal must persist before re-firing
+      RANGE_GUARD    : true,  // 3) no PUT near the range bottom, no CALL near the range top
+      RANGE_EDGE_PCT : 0.20,  //    treat the lowest/highest 20% of the recent range as the edge
+      LOW_RISK_PCT   : 0.01,  // 4) use this lighter % for short expiries (see SHORT_EXP_SEC)
+      SHORT_EXP_SEC  : 30,    //    expiries at/under this many seconds use LOW_RISK_PCT
     },
   };
 
@@ -156,7 +167,9 @@
     function size() {
       const bal = _bal();
       if (!CFG.RISK_PCT_ENABLED || bal <= 0) return tradeAmount;
-      let amt = bal * CFG.RISK_PCT;
+      // short expiries are noisier → use the lighter risk %
+      const pct = (expShift <= CFG.STRATEGY.SHORT_EXP_SEC) ? CFG.STRATEGY.LOW_RISK_PCT : CFG.RISK_PCT;
+      let amt = bal * pct;
       amt = Math.min(amt, bal * CFG.RISK_MAX_PCT, CFG.RISK_MAX_STAKE);
       amt = Math.max(amt, CFG.RISK_MIN_STAKE);
       return Math.round(amt * 100) / 100;
@@ -324,6 +337,10 @@
         continue;
       }
       recordResult(out.win, out.amount, isBot);
+      if (isBot) {   // arm/clear the anti-whipsaw block based on the bot's own result and its direction
+        if (!out.win) _whipsawBlockDir = (t.type === CFG.TYPE_PUT ? 'put' : 'call');
+        else _whipsawBlockDir = null;
+      }
       addLog((out.win ? '✅ WIN' : '❌ LOSS') + (isBot ? ' 🤖' : '') + ' #' + t.id + ' | ' + symOf(t.asset_id) + ' | exit ' + (t.close_rate ?? '—') + ' | result $' + out.amount.toFixed(2) + ' | streak ' + (out.win ? STATS.winStreak + 'W' : STATS.lossStreak + 'L'), out.win ? 'signal' : 'error');
       showResultPopup(out.win, out.win ? 'WIN' : 'LOSS', symOf(t.asset_id) + '  $' + out.amount.toFixed(2));
     }
@@ -444,11 +461,44 @@
     return { dir, conf, reasons, callScore: Math.round(callScore), putScore: Math.round(putScore) };
   }
 
+  // ─── protective-filter state + helpers ───
+  let _lastSigDir = null, _sigStableCount = 0, _whipsawBlockDir = null, _lastBlockMsg = '', _lastBlockLogAt = 0;
+
+  // recent-range stats for an asset's price series
+  function rangeStats(ser, lookback) {
+    if (!ser || ser.length < 2) return null;
+    const seg = ser.slice(-lookback);
+    let lo = seg[0], hi = seg[0];
+    for (const v of seg) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    const price = ser[ser.length - 1];
+    return { lo, hi, price, range: hi - lo, rangePct: price ? (hi - lo) / price : 0, pos: hi > lo ? (price - lo) / (hi - lo) : 0.5 };
+  }
+
+  // auto-trade protective gates → { ok, reason } (manual trades bypass these)
+  function autoTradeGuards(assetId, dir) {
+    const S = CFG.STRATEGY;
+    const rs = rangeStats(_series.get(assetId), S.VOL_LOOKBACK);
+    if (S.VOL_FILTER && rs && rs.rangePct < S.VOL_MIN_RANGE_PCT)
+      return { ok: false, reason: 'flat market (range ' + (rs.rangePct * 100).toFixed(3) + '% < ' + (S.VOL_MIN_RANGE_PCT * 100).toFixed(3) + '%)' };
+    if (S.RANGE_GUARD && rs && rs.range > 0) {
+      if (dir === 'put' && rs.pos <= S.RANGE_EDGE_PCT) return { ok: false, reason: 'PUT blocked near range bottom' };
+      if (dir === 'call' && rs.pos >= 1 - S.RANGE_EDGE_PCT) return { ok: false, reason: 'CALL blocked near range top' };
+    }
+    if (S.ANTI_WHIPSAW && _whipsawBlockDir && dir === _whipsawBlockDir && _sigStableCount < S.WHIPSAW_CONFIRM)
+      return { ok: false, reason: 'anti-whipsaw — confirming ' + _sigStableCount + '/' + S.WHIPSAW_CONFIRM + ' after loss' };
+    return { ok: true };
+  }
+
   // evaluation loop: refresh the signal and auto-fire when all gates pass
   function evaluateStrategy() {
     if (activeAssetId == null) return;
     _lastSignal = computeSignal(activeAssetId);
-    if (!autoTrade || !_lastSignal.dir) return;
+    const dir = _lastSignal.dir;
+    // track how long the signal direction has held (for the anti-whipsaw confirm)
+    if (dir && dir === _lastSigDir) _sigStableCount++; else { _sigStableCount = dir ? 1 : 0; _lastSigDir = dir; }
+    if (_whipsawBlockDir && dir && dir !== _whipsawBlockDir) _whipsawBlockDir = null;   // a fresh direction clears the block
+
+    if (!autoTrade || !dir) return;
     const S = CFG.STRATEGY;
     if (RiskManager.isHalted()) return;
     if (nowMs() < _pauseUntil) return;
@@ -456,9 +506,16 @@
     if (S.ONE_TRADE && _openTrades.size > 0) return;
     if (nowMs() - _lastAutoTradeMs < S.COOLDOWN_MS) return;
     if (!tradeWS || tradeWS.readyState !== 1 || !ensureToken()) return;
+
+    const guard = autoTradeGuards(activeAssetId, dir);
+    if (!guard.ok) {   // log a blocked signal at most once every 5s to avoid spam
+      if (guard.reason !== _lastBlockMsg || nowMs() - _lastBlockLogAt > 5000) { addLog('🛡️ skipped ' + (dir === 'put' ? 'PUT▼' : 'CALL▲') + ' — ' + guard.reason, 'info'); _lastBlockMsg = guard.reason; _lastBlockLogAt = nowMs(); }
+      return;
+    }
+    if (_whipsawBlockDir === dir) _whipsawBlockDir = null;   // confirmed → release the block
     _lastAutoTradeMs = nowMs();
-    addLog('🤖 auto signal: ' + (_lastSignal.dir === 'put' ? 'PUT▼' : 'CALL▲') + ' conf ' + _lastSignal.conf + '% — ' + _lastSignal.reasons.join(', '), 'signal');
-    executeTrade(_lastSignal.dir, activeAssetId, null, expShift);
+    addLog('🤖 auto signal: ' + (dir === 'put' ? 'PUT▼' : 'CALL▲') + ' conf ' + _lastSignal.conf + '% — ' + _lastSignal.reasons.join(', '), 'signal');
+    executeTrade(dir, activeAssetId, null, expShift);
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -1107,7 +1164,10 @@
       setText('cbRsiVal', r != null ? r.toFixed(0) : '–'); setIndBadge('cbRsiBadge', r == null ? '–' : (r <= CFG.STRATEGY.RSI_OS ? 'OS' : r >= CFG.STRATEGY.RSI_OB ? 'OB' : 'MID'), r == null ? '' : (r <= CFG.STRATEGY.RSI_OS ? 'up' : r >= CFG.STRATEGY.RSI_OB ? 'dn' : 'yw'));
       const base = ser[ser.length - 1 - CFG.STRATEGY.ROC_LOOKBACK];
       const roc = base ? (ser[ser.length - 1] - base) / base * 100 : 0;
-      setText('cbMomVal', roc.toFixed(3) + '%'); setIndBadge('cbMomBadge', roc > 0 ? 'UP' : roc < 0 ? 'DN' : '–', roc > 0 ? 'up' : roc < 0 ? 'dn' : '');
+      const rg = rangeStats(ser, CFG.STRATEGY.VOL_LOOKBACK);
+      const flat = rg && rg.rangePct < CFG.STRATEGY.VOL_MIN_RANGE_PCT;
+      setText('cbMomVal', roc.toFixed(3) + '% · نطاق ' + (rg ? (rg.rangePct * 100).toFixed(3) + '%' : '–'));
+      setIndBadge('cbMomBadge', flat ? 'FLAT' : (roc > 0 ? 'UP' : roc < 0 ? 'DN' : '–'), flat ? 'yw' : (roc > 0 ? 'up' : roc < 0 ? 'dn' : ''));
     }
     const tc = activeAssetId != null ? _tradersChoice.get(activeAssetId) : null;
     setText('cbCrowdVal', tc ? ('▲' + tc.call + '% / ▼' + tc.put + '%') : '–');
