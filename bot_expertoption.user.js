@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🛰️ EXPERTOPTION_ENGINE — WS Interceptor + Protocol Decoder + Trade Engine + Risk Guard + Signal Orb
 // @namespace    expertoption-trade-engine
-// @version      1.5.0
+// @version      1.6.0
 // @description  ExpertOption trading bot — intercepts the native JSON WebSocket protocol (candles / profile / trade lifecycle), tracks ticks·balance·active-asset, runs an adaptive signal engine, protects capital (% risk sizing, daily drawdown, loss-streak pause/halt), executes trades via the verified buyOption format, and shows a draggable panel + liquid-glass signal orb.
 // @author       aoirusra
 // @match        *://expertoption.com/*
@@ -84,8 +84,8 @@
       W_MOMENTUM     : 20,    // price-momentum weight
       W_CROWD        : 10,    // crowd indicator weight
       CROWD_FOLLOW   : true,  // true = trade with the majority, false = contrarian
-      MIN_CONFIDENCE : 50,    // confidence threshold to auto-fire (signal is now volatility-adaptive)
-      COOLDOWN_MS    : 3000,  // cooldown between auto trades — short, to catch 5-10s setups
+      MIN_CONFIDENCE : 52,    // confidence threshold to auto-fire (signal is now volatility-adaptive)
+      COOLDOWN_MS    : 4000,  // cooldown between auto trades — short, to catch 5-10s setups
       ONE_TRADE      : true,  // don't open a new trade while one is open
 
       // ─── protective filters (master toggle below; thresholds tuned to real OTC volatility) ───
@@ -95,8 +95,8 @@
       VOL_MIN_RANGE_PCT : 0.000002,  // min (high-low)/price; real OTC range ~0.000005, this blocks only dead-flat
       ANTI_WHIPSAW   : true,  // 2) after a loss, don't re-fire the SAME direction until it flips or confirms
       WHIPSAW_CONFIRM : 2,    //    new ticks the same signal must persist before re-firing
-      RANGE_GUARD    : true,  // 3) no PUT near the range bottom, no CALL near the range top
-      RANGE_EDGE_PCT : 0.10,  //    treat the lowest/highest 10% of the recent range as the edge
+      RANGE_GUARD    : true,  // 3) no PUT at the range bottom / CALL at the top UNLESS a trend agrees
+      RANGE_EDGE_PCT : 0.06,  //    treat the lowest/highest 6% of the recent range as the edge
       LOW_RISK_PCT   : 0.01,  // 4) use this lighter % for short expiries (see SHORT_EXP_SEC)
       SHORT_EXP_SEC  : 30,    //    expiries at/under this many seconds use LOW_RISK_PCT
     },
@@ -146,7 +146,9 @@
   let _lastAutoTradeMs = 0;
   const _botNs         = new Set();   // ns of trades sent through this tool
   const _botTradeIds   = new Set();   // tradeIds confirmed as bot trades
-  const _buyTemplates  = { call: null, put: null, _any: null };   // real buyOption message learned from manual trades
+  let _pendingOrderUntil = 0;         // lock: no new auto-order until the last one opens or times out
+  let _pendingSentAt   = 0;           // when the last bot order was sent (for the "not opening" diagnostic)
+  let _pendingOpened   = true;        // did the last bot order actually open?
 
   // ─── stats / streak ───
   const STATS = { trades: 0, wins: 0, losses: 0, pnl: 0, lossStreak: 0, winStreak: 0, bestStreak: 0 };
@@ -370,7 +372,7 @@
       case CFG.A.TRADERS_CHOICE: onTradersChoice(message); break;
       case CFG.A.BUY:
         if (message?.trade_id != null) {
-          if (fullMsg && _botNs.has(fullMsg.ns)) { _botTradeIds.add(message.trade_id); _botNs.delete(fullMsg.ns); }
+          if (fullMsg && _botNs.has(fullMsg.ns)) { _botTradeIds.add(message.trade_id); _botNs.delete(fullMsg.ns); _pendingOpened = true; _pendingOrderUntil = 0; }  // order accepted → release the lock
           addLog('📨 buy confirmed — trade_id ' + message.trade_id, 'info');
         }
         break;
@@ -486,9 +488,14 @@
     const rs = rangeStats(_series.get(assetId), S.VOL_LOOKBACK);
     if (S.VOL_FILTER && rs && rs.rangePct < S.VOL_MIN_RANGE_PCT)
       return { ok: false, reason: 'flat market (range ' + (rs.rangePct * 100).toFixed(3) + '% < ' + (S.VOL_MIN_RANGE_PCT * 100).toFixed(3) + '%)' };
+    // range guard: only block "buy the top / sell the bottom" when the move is NOT trending in
+    // that direction (a real trend rides the edge — don't fight it). Skip the guard if EMA agrees.
     if (S.RANGE_GUARD && rs && rs.range > 0) {
-      if (dir === 'put' && rs.pos <= S.RANGE_EDGE_PCT) return { ok: false, reason: 'PUT blocked near range bottom' };
-      if (dir === 'call' && rs.pos >= 1 - S.RANGE_EDGE_PCT) return { ok: false, reason: 'CALL blocked near range top' };
+      const ser = _series.get(assetId);
+      const eF = ema(ser.slice(-S.EMA_SLOW * 2), S.EMA_FAST), eS = ema(ser.slice(-S.EMA_SLOW * 2), S.EMA_SLOW);
+      const trendUp = eF != null && eS != null && eF > eS, trendDn = eF != null && eS != null && eF < eS;
+      if (dir === 'put' && rs.pos <= S.RANGE_EDGE_PCT && !trendDn) return { ok: false, reason: 'PUT blocked near range bottom (no down-trend)' };
+      if (dir === 'call' && rs.pos >= 1 - S.RANGE_EDGE_PCT && !trendUp) return { ok: false, reason: 'CALL blocked near range top (no up-trend)' };
     }
     if (S.ANTI_WHIPSAW && _whipsawBlockDir && dir === _whipsawBlockDir && _sigStableCount < S.WHIPSAW_CONFIRM)
       return { ok: false, reason: 'anti-whipsaw — confirming ' + _sigStableCount + '/' + S.WHIPSAW_CONFIRM + ' after loss' };
@@ -504,12 +511,19 @@
     if (dir && dir === _lastSigDir) _sigStableCount++; else { _sigStableCount = dir ? 1 : 0; _lastSigDir = dir; }
     if (_whipsawBlockDir && dir && dir !== _whipsawBlockDir) _whipsawBlockDir = null;   // a fresh direction clears the block
 
+    // diagnostic: the previous order was sent but never confirmed → likely rejected (asset id / expiry)
+    if (!_pendingOpened && _pendingSentAt && nowMs() - _pendingSentAt > 4000) {
+      _pendingOpened = true;   // log once, then stop nagging
+      addLog('⚠️ last order sent but not confirmed by the server — possible rejection (wrong asset id or expiry). Export traffic if it persists.', 'error');
+    }
+
     if (!autoTrade || !dir) return;
     const S = CFG.STRATEGY;
     if (RiskManager.isHalted()) return;
     if (nowMs() < _pauseUntil) return;
     if (_lastSignal.conf < minConfidence) return;
-    if (S.ONE_TRADE && _openTrades.size > 0) return;
+    if (S.ONE_TRADE && _openTrades.size > 0) return;   // a trade is open → wait
+    if (nowMs() < _pendingOrderUntil) return;          // an order is in-flight (sent, awaiting confirm) → don't spam
     if (nowMs() - _lastAutoTradeMs < S.COOLDOWN_MS) return;
     if (!tradeWS || tradeWS.readyState !== 1 || !ensureToken()) return;
 
@@ -581,7 +595,6 @@
         else if (ArrayBuffer.isView(data)) { const b = new Uint8Array(data.buffer, data.byteOffset, data.byteLength); txt = tryUtf8(b); size = b.length; }
         const d = txt ? safeJSONParse(txt) : null;
         if (d && d.token) { lastToken = d.token; if (d.action) { tradeWS = ws; tradeWSOrig = origSend; } }  // socket carrying platform commands = confirmed trade socket
-        if (d && d.action === 'buyOption' && !(d.ns != null && _botNs.has(d.ns))) learnBuyTemplate(d);     // learn the real format from manual trades (not the bot's own)
         Diag.record('OUT', typeof data === 'string' ? 'text' : 'binary', size, d ? { method: 'json', value: d } : null);
       } catch (_) {}
       return origSend(data);
@@ -607,54 +620,19 @@
   // ══════════════════════════════════════════════════════════════════════
   // § 10  TRADE ENGINE  (verified buyOption format)
   // ══════════════════════════════════════════════════════════════════════
-  // detect the direction encoded in a real outgoing buyOption message
-  function detectDir(m) {
-    for (const k in m) { const v = m[k]; if (v === 'call') return 'call'; if (v === 'put') return 'put'; }
-    if (m.type === CFG.TYPE_CALL) return 'call';
-    if (m.type === CFG.TYPE_PUT) return 'put';
-    return null;
-  }
-  // learn the exact buyOption format from a manual (non-bot) trade so the bot can replay it verbatim
-  function learnBuyTemplate(d) {
-    const m = d && d.message;
-    if (!m || typeof m !== 'object') return;
-    const dir = detectDir(m);
-    const copy = JSON.parse(JSON.stringify(m));
-    if (dir) {
-      if (!_buyTemplates[dir]) addLog('📐 learned the real buyOption format from your manual ' + dir.toUpperCase() + ' — the bot will now replay it exactly', 'signal');
-      _buyTemplates[dir] = copy;
-    } else {
-      _buyTemplates._any = copy;
-    }
-  }
-
   function buildOpenPayload(direction, assetId, amount, expSeconds, ns) {
-    const tpl = _buyTemplates[direction] || _buyTemplates._any;
-    let message;
-    if (tpl) {
-      // replay the real platform format, overriding only amount / asset / demo-flag / strike-time
-      message = JSON.parse(JSON.stringify(tpl));
-      for (const k in message) {
-        const v = message[k];
-        if (/amount|sum|invest|bet/i.test(k) && typeof v === 'number') message[k] = amount;
-        else if (/asset/i.test(k)) message[k] = assetId;
-        else if (/is_?demo|^demo$/i.test(k)) message[k] = isDemo;
-        else if (/exp_?time/i.test(k) && typeof v === 'number' && v > 1e9) message[k] = nowSec() + expSeconds;   // absolute expiry = now + duration
-        else if (/strike_?time|^time$/i.test(k) && typeof v === 'number' && v > 1e9) message[k] = nowSec();        // strike anchored to now
-        else if (/expiration_?shift|exp_?shift|^period$|^duration$|expiry/i.test(k) && typeof v === 'number') message[k] = expSeconds;  // relative duration → honor the picker
-      }
-    } else {
-      // fallback format (used until the bot has seen one manual trade to learn from)
-      message = {
-        type            : direction === 'put' ? 'put' : 'call',
-        amount          : amount,
-        assetid         : assetId,                 // lowercase (confirmed from traffic)
-        strike_time     : nowSec(),
-        is_demo         : isDemo,
-        expiration_shift: expSeconds,
-        ratePosition    : 0,
-      };
-    }
+    // controlled format — verified to open trades at the correct size and expiry.
+    // (We do NOT replay a learned manual template: it dragged in the manual $1000
+    //  stake and a 30s expiry, overriding the bot's own sizing/duration.)
+    const message = {
+      type            : direction === 'put' ? 'put' : 'call',
+      amount          : amount,
+      assetid         : assetId,                 // lowercase (confirmed from traffic)
+      strike_time     : nowSec(),
+      is_demo         : isDemo,
+      expiration_shift: expSeconds,
+      ratePosition    : 0,
+    };
     return JSON.stringify({ action: 'buyOption', message, token: lastToken, ns: ns != null ? ns : nextNs() });
   }
 
@@ -692,6 +670,7 @@
     const payload = buildOpenPayload(direction, aid, amt, exp, ns);
     try {
       tradeWS.send(new TextEncoder().encode(payload));   // through the hook → logged in traffic for verification
+      _pendingOrderUntil = nowMs() + 4000; _pendingSentAt = nowMs(); _pendingOpened = false;   // lock until this order is confirmed (or times out)
       addLog('⚡ sent: ' + (direction === 'put' ? 'PUT▼' : 'CALL▲') + ' | ' + symOf(aid) + ' | $' + amt + ' | ' + exp + 's | token✓ | ns=' + ns, 'signal');
       showSignalPopup({ direction: direction === 'put' ? 'put' : 'call', asset: symOf(aid), price: _lastPrice.get(aid) || 0, confidence: _lastSignal.conf || 0, durationSec: exp });
       return true;
