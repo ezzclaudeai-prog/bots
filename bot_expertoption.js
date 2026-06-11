@@ -54,6 +54,7 @@
       TRADE_STATUS   : 'tradesStatus',          // حالة حيّة للصفقات المفتوحة
       CROWD_STAT     : 'openOptionsStat',        // إحصاء جماعي
       CROWD_FEED     : 'expertOption',           // صفقات المتداولين الآخرين (sentiment)
+      TRADERS_CHOICE : 'tradersChoice',          // مؤشر الجمهور الرسمي { asset_id, put% }
     },
     // خريطة النوع الرقمي في كائنات النتائج: 0=call (شراء/صعود)، 1=put (بيع/هبوط)
     TYPE_CALL: 0, TYPE_PUT: 1,
@@ -95,6 +96,7 @@
   const _assetsById   = new Map();   // assetId → { symbol, name, profit, digits, expStep, purchaseTime, active }
   const _openTrades   = new Map();   // tradeId → trade
   const _sentiment    = new Map();   // assetId → { call, put, ts }  (من CROWD_FEED)
+  const _tradersChoice = new Map();  // assetId → { put, call }  (مؤشر المنصة الرسمي %)
 
   function symOf(id) { const a = _assetsById.get(id); return a ? a.symbol : ('#' + id); }
   function curBalance() { return isDemo ? balanceDemo : balanceReal; }
@@ -244,10 +246,21 @@
     }
   }
 
+  function onTradersChoice(m) {
+    // مؤشر المنصة الرسمي: نسبة من اختاروا put لكل أصل
+    const list = m?.assets;
+    if (!Array.isArray(list)) return;
+    for (const a of list) {
+      if (a.asset_id == null || a.put == null) continue;
+      _tradersChoice.set(a.asset_id, { put: +a.put, call: 100 - +a.put });
+    }
+  }
+
   function dispatch(action, message, fullMsg) {
     if (fullMsg && fullMsg.token) lastToken = fullMsg.token;
     switch (action) {
       case CFG.A.CANDLES:      onCandles(message); break;
+      case CFG.A.TRADERS_CHOICE: onTradersChoice(message); break;
       case CFG.A.SUBSCRIBE:    onSubscribe(message); break;
       case CFG.A.PROFILE:      onProfile(message); break;
       case CFG.A.ASSETS:       onAssets(message); break;
@@ -425,8 +438,9 @@
   }
   function updateHud() {
     if (!_hudEl) return;
+    const tc = activeAssetId != null ? _tradersChoice.get(activeAssetId) : null;
     const s = activeAssetId != null ? _sentiment.get(activeAssetId) : null;
-    const sent = s ? ('▲' + s.call + ' / ▼' + s.put) : '—';
+    const sent = tc ? ('▲' + tc.call + '% / ▼' + tc.put + '%') : (s ? ('▲' + s.call + ' / ▼' + s.put) : '—');
     const price = activeAssetId != null ? _lastPrice.get(activeAssetId) : null;
     const asset = activeAssetId != null ? _assetsById.get(activeAssetId) : null;
     _hudEl.innerHTML =
@@ -549,7 +563,7 @@
   W.__EO_SPY = {
     CFG, Diag, executeTrade, binDecode,
     state: () => ({ activeAsset: activeAssetId != null ? symOf(activeAssetId) : null, assetId: activeAssetId, wsConnected, totalTicks, totalFrames, balance: curBalance(), isDemo, openTrades: _openTrades.size, assets: _assetsById.size, lastToken: !!lastToken }),
-    assets: () => _assetsById, trades: () => _openTrades, sentiment: () => _sentiment, price: (id) => _lastPrice.get(id ?? activeAssetId),
+    assets: () => _assetsById, trades: () => _openTrades, sentiment: () => _sentiment, tradersChoice: () => _tradersChoice, price: (id) => _lastPrice.get(id ?? activeAssetId),
   };
   setIntervalT(updateHud, 1000);
 
