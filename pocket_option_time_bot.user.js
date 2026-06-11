@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ⏱️ PO TIME-CLICK BOT — M1 Timed Strategy + Predictive Momentum + DOM Click Execution
 // @namespace    pocket-option-time-click-bot
-// @version      1.2.0
+// @version      1.3.0
 // @description  بوت تداول ذاتي لمنصة بوكيت أوبشن: استخراج تلقائي للأزرار وعمر الصفقة وعمر شمعة M1، استراتيجية زمنية (ث36/26/11)، فلتر زخم تنبّئي من مقابس ORACLE/MAIN، نظام تجميد زمني لحماية رأس المال، والتنفيذ حصراً عبر محاكاة النقر الفيزيائي على أزرار الشراء/البيع. يعمل بالكامل بدون كونسول (Kiwi Browser + Violentmonkey).
 // @author       aoirusra
 // @match        *://pocketoption.com/*
@@ -47,7 +47,9 @@
     DEFAULT_TRADE_SEC   : 5,         // عمر صفقة افتراضي إذا تعذّر استخراجه
 
     RESCAN_DOM_MS       : 4000,      // إعادة مسح عناصر الواجهة دورياً
-    LOG_MAX             : 220,
+    LOG_MAX             : 500,       // ⬆ كما في v17: سجل عميق 500 سطر
+    LOG_TICK_EVERY      : 5,         // سجّل كل خامس تيك (كما في v17)
+    STREAM_GAP_MS       : 5000,      // إنذار انقطاع التدفق
     AUTOSTART           : false,     // لا يتداول حتى يضغط المستخدم تشغيل
   };
 
@@ -83,6 +85,17 @@
   let lastClickMs      = 0;
 
   const stats = { entries: 0, blocked: 0, reversals: 0, cooldowns: 0 };
+
+  // ── إحصاءات التيكات (بنمط v17 + أكثر) ──
+  const tk = {
+    total: 0, oracle: 0, main: 0,   // عدّادات تراكمية
+    candleCount: 0,                 // تيكات الشمعة الحالية
+    lastTickMs: 0,                  // آخر تيك (محلي)
+    perSecBuf: [],                  // طوابع آخر ثانية لحساب المعدّل
+    stalled: false,                 // هل توقف التدفق؟
+    labTs: 0,                       // آخر توقيت خادم دقيق (ms)
+  };
+  const _evSeen = {};               // throttle لتسجيل أنواع أحداث WSS
 
   // ══════════════════════════════════════════════════════════════════════
   // § 3  UTIL
@@ -169,6 +182,16 @@
     return null;
   }
 
+  // ── استخراج عداد الشمعة من حدث chafor: payload = [[asset, seconds]] ──
+  //   هذا هو نفس عداد «M1 00:24» الظاهر على الرسم — لكنه يصل عبر الـ WSS
+  //   (لا حاجة لقراءة الكانفاس إطلاقاً): دقّة بالملي ثانية ومصدر موثوق.
+  function extractChafor(decoded) {
+    if (!Array.isArray(decoded) || !Array.isArray(decoded[0]) || decoded[0].length < 2) return null;
+    const asset = normalizeAsset(decoded[0][0]), seconds = Number(decoded[0][1]);
+    if (asset.length >= 3 && Number.isFinite(seconds) && seconds >= 0) return { asset, seconds };
+    return null;
+  }
+
   // ── استخراج عمر الصفقة (fastTimeframe) ووقت إغلاق الشمعة (fastCloseAt) ──
   function ingestSettings(s, full) {
     if (!s) return;
@@ -184,8 +207,26 @@
     } catch (_) {}
   }
 
-  function handleDecodedEvent(evName, payload) {
+  // تسجيل أنواع أحداث WSS (مكشوف لكن غير مُغرِق): أول مرة فوراً ثم كل ثانية
+  function logWssEvent(role, evName) {
+    if (!evName || evName === 'raw') return;
+    const key = role + ':' + evName;
+    const t = now();
+    const e = _evSeen[key] || (_evSeen[key] = { n: 0, last: 0 });
+    e.n++;
+    if (e.n === 1 || t - e.last > 1000) {
+      e.last = t;
+      log('📥 [WSS-' + (role === 'oracle' ? 'O' : 'M') + '] ' + evName + ' ×' + e.n, 'wss');
+    }
+  }
+
+  function handleDecodedEvent(role, evName, payload) {
     try {
+      logWssEvent(role, evName);
+      if (evName === 'chafor') {
+        const cf = extractChafor(payload);
+        if (cf) onChafor(cf.asset, cf.seconds);
+      }
       if (evName === 'changeSymbol' && payload && payload.asset) setActiveAsset(payload.asset);
       if (evName === 'saveCharts') {
         const s = (payload && payload.settings) || payload || {};
@@ -212,7 +253,7 @@
           let arr; try { arr = JSON.parse(raw.slice(2)); } catch (_) { arr = null; }
           if (Array.isArray(arr)) {
             const evName = arr[0], payload = arr[1];
-            handleDecodedEvent(evName, payload);
+            handleDecodedEvent(role, evName, payload);
             const tick = extractTickFromArray(arr[1]);
             if (tick) onTick(role, tick.asset, tick.price, tick.ts);
           }
@@ -283,16 +324,28 @@
   }
 
   function onTick(role, asset, price, serverTsSec) {
-    // مزامنة إزاحة الخادم من طابع زمن التيك (ثوانٍ)
-    if (typeof serverTsSec === 'number' && serverTsSec > 1e9) {
-      const off = serverTsSec * 1000 - now();
-      if (!_serverOffsetSet || Math.abs(off) < 60000) { _serverOffsetMs = off; _serverOffsetSet = true; }
+    if (!asset || !(price > 0) || isNaN(price)) return;
+    const t = now();
+    // ✅ دقّة الملي‑ثانية: استخدم توقيت الخادم (التيك = [الزوج, توقيت‑الخادم, السعر])
+    //   ونتحقق أنه ضمن ±5ث من المحلي قبل اعتماده كإزاحة.
+    if (typeof serverTsSec === 'number' && serverTsSec > 1e9 && serverTsSec < 1e11) {
+      const sMs = Math.round(serverTsSec * 1000);
+      if (Math.abs(sMs - t) < 5000) { tk.labTs = sMs; _serverOffsetMs = sMs - t; _serverOffsetSet = true; }
     }
     if (!activeAsset) setActiveAsset(asset);
     if (normalizeAsset(asset) !== activeAsset) return;
 
-    const t = now();
-    const rec = { p: price, t };
+    // عدّادات تراكمية + معدّل التيك/ثانية
+    tk.total++; if (role === 'oracle') tk.oracle++; else tk.main++;
+    tk.candleCount++;
+    tk.lastTickMs = t;
+    tk.perSecBuf.push(t);
+    while (tk.perSecBuf.length && tk.perSecBuf[0] < t - 1000) tk.perSecBuf.shift();
+
+    // استعادة التدفق
+    if (tk.stalled) { tk.stalled = false; log('✅ [STREAM] استعاد تدفق التيكات', 'signal'); }
+
+    const rec = { p: price, t, st: tk.labTs || t };
     if (role === 'oracle') ticks.oracle.push(rec);
     else ticks.main.push(rec);
     ticks.merged.push(rec);
@@ -303,25 +356,86 @@
 
     updateCandle(price);
     if (openTradeWatch) watchReversal(price);
+
+    // تسجيل مفصّل كل N تيك (كما في v17 + سرعة/ميل/مصدر)
+    if (tk.total % CFG.LOG_TICK_EVERY === 0) {
+      const s = microSlope(ticks.merged, 1000);
+      const slopeStr = s ? ((s.rel >= 0 ? '+' : '') + (s.rel * 1e6).toFixed(1) + 'e-6') : '—';
+      log('📡 تيك #' + tk.total + ' | ' + price.toFixed(5) +
+          ' | ' + role.toUpperCase().charAt(0) + ' | شمعة:' + tk.candleCount +
+          ' | ' + tickRate() + '/ث | ميل1s ' + slopeStr, 'tick');
+    }
   }
+
+  function tickRate() { return tk.perSecBuf.length; }   // تيكات في آخر ثانية
+
+  // عداد الشمعة من WSS (chafor): seconds = الثواني المتبقية في شمعة M1
+  function onChafor(asset, seconds) {
+    if (normalizeAsset(asset) !== (activeAsset || normalizeAsset(asset))) {
+      if (activeAsset && normalizeAsset(asset) !== activeAsset) return;
+    }
+    const remain = Math.max(0, Math.min(CFG.CANDLE_SEC, seconds));
+    // كشف بداية شمعة جديدة: العدّاد قفز لأعلى (إعادة الدورة)
+    if (_chafor.prev != null && remain > _chafor.prev + 1) {
+      log('🕯️ شمعة M1 جديدة (chafor) — أُغلقت بعد ' + tk.candleCount + ' تيك', 'info');
+      tk.candleCount = 0;
+    }
+    _chafor.prev = remain;
+    _chafor.lastMs = now();
+    // مرساة دقيقة: المنقضي = 60 - المتبقي عند لحظة الاستلام
+    _chafor.anchor = { elapsedMs0: (CFG.CANDLE_SEC - remain) * 1000, t0: now() };
+  }
+  const _chafor = { prev: null, anchor: null, lastMs: 0 };
 
   function trimOld(arr, cutoff) { while (arr.length && arr[0].t < cutoff) arr.shift(); }
 
-  // مرساة العداد التنازلي من الواجهة (M1 00:24): أدق مصدر لعمر الشمعة.
-  // تُحدَّث عند كل «قفزة ثانية» للعداد — لحظة القفزة = رأس ثانية مضبوطة.
+  // ── ميل/عجلة/قفزة لحظية (بنمط v17: microSlope/microAccel/lastSpike) ──
+  function microSlope(buf, ms) {
+    if (!buf || buf.length < 2) return null;
+    const last = buf[buf.length - 1], p1 = last.p, nowMs = last.t;
+    let i = buf.length - 1; while (i > 0 && buf[i].t > nowMs - ms) i--;
+    const p0 = buf[i].p, dt = nowMs - buf[i].t, n = buf.length - 1 - i;
+    if (!(p0 > 0) || dt <= 0) return null;
+    return { rel: (p1 - p0) / p0, abs: p1 - p0, dt, ticks: n, ratePerSec: n / (dt / 1000) };
+  }
+  function microAccel(buf, ms) {
+    if (!buf || buf.length < 3) return null;
+    const last = buf[buf.length - 1], nowMs = last.t, half = ms * 0.5;
+    let iMid = buf.length - 1; while (iMid > 0 && buf[iMid].t > nowMs - half) iMid--;
+    let iStart = iMid;        while (iStart > 0 && buf[iStart].t > nowMs - ms) iStart--;
+    const pNow = last.p, pMid = buf[iMid].p, pStart = buf[iStart].p;
+    const dt1 = buf[iMid].t - buf[iStart].t, dt2 = nowMs - buf[iMid].t;
+    if (!(pStart > 0) || !(pMid > 0) || dt1 <= 0 || dt2 <= 0) return null;
+    const v1 = ((pMid - pStart) / pStart) / (dt1 / 1000);
+    const v2 = ((pNow - pMid) / pMid) / (dt2 / 1000);
+    return { v1, v2, accel: v2 - v1, vel: v2, ticks: buf.length - 1 - iStart };
+  }
+
+  // مصدر عمر الشمعة (بالأولوية): مرساة chafor من WSS (= نفس عداد M1 على الرسم)،
+  // ثم مرساة عداد DOM إن وُجد، ثم شبكة دقيقة بساعة الخادم المتزامنة.
   let _domAnchor = null;   // { elapsedMs0, t0 }
+  function _activeAnchor() {
+    if (_chafor.anchor && (now() - _chafor.anchor.t0) < 130000) return _chafor.anchor;
+    if (_domAnchor && (now() - _domAnchor.t0) < 130000) return _domAnchor;
+    return null;
+  }
+  function candleSource() {
+    if (_chafor.anchor && (now() - _chafor.anchor.t0) < 130000) return 'chafor';
+    if (_domAnchor && (now() - _domAnchor.t0) < 130000) return 'dom';
+    return 'server';
+  }
   function _candleMs() {
     const P = CFG.CANDLE_SEC * 1000;
-    if (_domAnchor && (now() - _domAnchor.t0) < 130000) {
-      return (((_domAnchor.elapsedMs0 + (now() - _domAnchor.t0)) % P) + P) % P;
-    }
+    const a = _activeAnchor();
+    if (a) return (((a.elapsedMs0 + (now() - a.t0)) % P) + P) % P;
     return ((serverNow() % P) + P) % P;
   }
   function candleIndex() {
     const P = CFG.CANDLE_SEC * 1000;
-    if (_domAnchor && (now() - _domAnchor.t0) < 130000) {
-      const elapsed = _domAnchor.elapsedMs0 + (now() - _domAnchor.t0);
-      return Math.floor((_domAnchor.t0 - _domAnchor.elapsedMs0) / P) + Math.floor(elapsed / P);
+    const a = _activeAnchor();
+    if (a) {
+      const elapsed = a.elapsedMs0 + (now() - a.t0);
+      return Math.floor((a.t0 - a.elapsedMs0) / P) + Math.floor(elapsed / P);
     }
     return Math.floor(serverNow() / P);
   }
@@ -380,29 +494,39 @@
     const noise = tickNoise(win) || 1e-9;
     const full   = slope(arr, CFG.MOM_WINDOW_MS);   // اتجاه عام (آخر 10ث)
     const recent = slope(arr, CFG.MOM_RECENT_MS);   // زخم لحظي (آخر ~2.5ث)
+    const accel  = microAccel(arr, CFG.MOM_RECENT_MS);  // عجلة (تسارع/استنفاد)
 
     const netDir   = Math.sign(full.net);
     const recDir   = Math.sign(recent.v);
+    // تفاصيل تُسجّل في كل الأحوال
+    const det = {
+      noise, net: full.net, vRec: recent.v, ticks: win.length,
+      accel: accel ? accel.accel : 0,
+      s: '∑' + win.length + 'ت net' + (full.net>=0?'+':'') + (full.net*1e6).toFixed(1) +
+         'e-6 vRec' + (recent.v>=0?'+':'') + (recent.v*1e6).toFixed(2) +
+         ' acc' + (accel ? (accel.accel>=0?'+':'') + accel.accel.toFixed(4) : '—') +
+         ' σ' + (noise*1e6).toFixed(1) + 'e-6'
+    };
 
     // 1) الاتجاه العام يجب أن يوافق الاتجاه المقصود وأن يتجاوز الضجيج
-    if (netDir !== dir) return { ok:false, reason:'trend≠dir' };
+    if (netDir !== dir) return { ok:false, reason:'الاتجاه العام ضد الصفقة', det };
     if (Math.abs(full.net) < noise * CFG.MOM_NET_NOISE_MULT)
-      return { ok:false, reason:'net<noise' };
+      return { ok:false, reason:'صافي الحركة < الضجيج', det };
 
     // 2) الزخم اللحظي يجب ألا يكون معاكساً وأن يكون قوياً بما يكفي
-    if (recDir !== 0 && recDir !== dir) return { ok:false, reason:'recent-reversal' };
+    if (recDir !== 0 && recDir !== dir) return { ok:false, reason:'انعكاس لحظي', det };
     const recentMove = Math.abs(recent.v) * CFG.MOM_RECENT_MS;
     if (recentMove < noise * CFG.MOM_RECENT_NOISE_MULT)
-      return { ok:false, reason:'recent-weak' };
+      return { ok:false, reason:'زخم لحظي ضعيف', det };
 
     // 3) تغطية عمر الصفقة: هل سيستمر الزخم > عمر الصفقة بناءً على السرعة الحالية؟
     if (CFG.MOM_REQUIRE_COVER) {
       const durMs = (tradeDurSec()) * 1000;
       const projected = Math.abs(recent.v) * durMs;     // الحركة المتوقعة خلال عمر الصفقة
       if (projected < noise * 1.0)                       // أقل من تيك واحد متوقع = زخم لا يكفي
-        return { ok:false, reason:'no-cover' };
+        return { ok:false, reason:'لا يغطّي عمر الصفقة', det };
     }
-    return { ok:true, reason:'strong', net: full.net, v: recent.v, noise };
+    return { ok:true, reason:'زخم قوي ممتد', det };
   }
 
   function tradeDurSec() {
@@ -718,7 +842,9 @@
     }
 
     const cdir = candleDirection();
-    if (cdir === 0) { firedThisCandle.add(key); log('• اتجاه شمعة غير محدد — ث' + sec, 'warn'); return; }
+    log('⏰ نافذة ث' + sec + ' (' + (mode==='trend'?'مع الاتجاه':'معاكس') + ') | شمعة ' +
+        (cdir>0?'صعود▲':cdir<0?'هبوط▼':'محايد') + ' | مصدر العداد:' + candleSource(), 'info');
+    if (cdir === 0) { firedThisCandle.add(key); log('• اتجاه شمعة غير محدد — تخطّي ث' + sec, 'warn'); return; }
 
     // الاتجاه المقصود
     const dir = mode === 'trend' ? cdir : -cdir;
@@ -728,11 +854,12 @@
     firedThisCandle.add(key);   // علّم محاولة هذه الثانية بصرف النظر عن النتيجة
     if (!mom.ok) {
       stats.blocked++;
-      log('⛔ حجب الزخم ث' + sec + ' (' + (mode==='trend'?'مع':'عكس') + ') ' + (dir>0?'CALL':'PUT') + ' — ' + mom.reason, 'warn');
+      log('⛔ حجب ث' + sec + ' ' + (dir>0?'CALL':'PUT') + ' — ' + mom.reason +
+          (mom.det ? ' | ' + mom.det.s : ''), 'warn');
       updateHUD();
       return;
     }
-    log('✅ زخم مؤكد ث' + sec + ' — ' + (dir>0?'CALL':'PUT') + ' (' + mom.reason + ')', 'signal');
+    log('✅ زخم مؤكد ث' + sec + ' — ' + (dir>0?'CALL':'PUT') + ' | ' + mom.det.s, 'signal');
     const lbl = 'ث' + sec + (mode === 'counter' ? ' معاكس' : ' مع الاتجاه');
     setSignalBox(dir, lbl);
     showSignalPopup(dir, lbl);
@@ -770,7 +897,7 @@
     if (!_logPaused) renderLog();
     try { if (W.navigator && W.navigator.vibrate && (kind === 'trade')) W.navigator.vibrate(40); } catch (_) {}
   }
-  const LOG_COLORS = { trade:'#46d98e', signal:'#3fe0ff', error:'#ff5b6e', warn:'#ffd24a', risk:'#ff9f1c', info:'#9fb2c0' };
+  const LOG_COLORS = { trade:'#46d98e', signal:'#3fe0ff', error:'#ff5b6e', warn:'#ffd24a', risk:'#ff9f1c', info:'#9fb2c0', tick:'#7aa2c4', wss:'#9b8cff' };
   function renderLog() {
     if (!logInnerEl) return;
     const items = logBuf.filter(e => _logFilter === 'all' ? true : e.kind === _logFilter);
@@ -1010,6 +1137,8 @@
       <button class="cb-lf" data-f="signal">📡 إشارات</button>
       <button class="cb-lf" data-f="warn">⛔ حجب</button>
       <button class="cb-lf" data-f="risk">🧊 مخاطر</button>
+      <button class="cb-lf" data-f="tick">📡 تيك</button>
+      <button class="cb-lf" data-f="wss">📥 WSS</button>
       <button class="cb-lf" data-f="info">ℹ معلومات</button>
     </div>
     <div id="cbLogInner"></div>
@@ -1056,16 +1185,30 @@
     setTxt('cbAsset', activeAsset ? activeAsset.replace(/_OTC$/i, ' OTC') : 'جاري…');
     setTxt('cbPrice', lastPrice ? lastPrice.toFixed(5) : '–');
     setTxt('cbTradeDur', tradeDurSec() + 'ث' + (_tradeDurationSec >= 1 ? '' : ' (افتراضي)'));
-    setTxt('cbCd', 'ث' + sec);
-    setTxt('cbTickCount', ticks.merged.length);
+    const remain = activeAsset ? (CFG.CANDLE_SEC - sec) : '–';
+    setTxt('cbCd', 'ث' + sec + ' / ⏳' + remain + ' · ' + candleSource());
+    setTxt('cbTickCount', tk.total + ' · ' + tickRate() + '/ث');
+
+    // صف الزخم: ميل لحظي + عجلة
+    const mv = $('cbMomVal'), mb = $('cbMomBadge');
+    const s500 = microSlope(ticks.merged, 500), acc = microAccel(ticks.merged, 2500);
+    if (mv) mv.textContent = s500
+      ? ((s500.rel>=0?'+':'') + (s500.rel*1e6).toFixed(1) + 'e-6 · ' + s500.ratePerSec.toFixed(1) + 't/s')
+      : '–';
+    if (mb) {
+      const d = s500 ? Math.sign(s500.rel) : 0;
+      const accUp = acc ? acc.accel > 0 : false;
+      mb.textContent = d>0 ? (accUp?'صاعد⤴':'صاعد▲') : d<0 ? (accUp?'هابط⤵':'هابط▼') : 'مسطّح';
+      mb.className = 'cb-ind-badge ' + (d>0?'up':d<0?'dn':'yw');
+    }
 
     const cv = $('cbCandleVal'), cb = $('cbCandleBadge');
     if (cv) cv.textContent = candleOpenPrice ? candleOpenPrice.toFixed(5) + ' ← ' + (lastPrice||0).toFixed(5) : '–';
     if (cb) { cb.textContent = cdir > 0 ? 'صعود ▲' : cdir < 0 ? 'هبوط ▼' : 'محايد'; cb.className = 'cb-ind-badge ' + (cdir>0?'up':cdir<0?'dn':''); }
 
     const wss = $('cbWssVal'), wssB = $('cbWssBadge');
-    if (wss) wss.textContent = 'O:' + ticks.oracle.length + ' · M:' + ticks.main.length;
-    if (wssB) { const on = ticks.merged.length > 0; wssB.textContent = on ? '🟢 متصل' : '🔴 انتظار'; wssB.className = 'cb-ind-badge ' + (on?'up':'dn'); }
+    if (wss) wss.textContent = '🔮O:' + tk.oracle + ' · ⚡M:' + tk.main + (tk.stalled?' · ⚠️متوقف':'');
+    if (wssB) { const on = tk.lastTickMs && (now()-tk.lastTickMs) < CFG.STREAM_GAP_MS; wssB.textContent = on ? '🟢 متدفّق' : '🔴 انتظار'; wssB.className = 'cb-ind-badge ' + (on?'up':'dn'); }
 
     const dv = $('cbDomVal'), db = $('cbDomBadge');
     const found = (DOM.buyBtn?1:0)+(DOM.sellBtn?1:0)+(DOM.durInput?1:0);
@@ -1169,14 +1312,27 @@
   // ══════════════════════════════════════════════════════════════════════
   // § 11  BOOT
   // ══════════════════════════════════════════════════════════════════════
+  // مراقب التدفق: ينذر عند انقطاع التيكات (كما في v17)
+  function streamWatchdog() {
+    if (!tk.lastTickMs) return;
+    const gap = now() - tk.lastTickMs;
+    if (gap > CFG.STREAM_GAP_MS && !tk.stalled) {
+      tk.stalled = true;
+      log('⚠️ [STREAM] انقطع تدفق التيكات منذ ' + (gap/1000|0) + 'ث', 'error');
+      updateHUD();
+    }
+  }
+
   function boot() {
     buildHUD();
     scanDOM();
     setInterval(scanDOM, CFG.RESCAN_DOM_MS);
-    setInterval(countdownPoll, 400);    // متتبّع عداد الشمعة + مرساة الطور
+    setInterval(countdownPoll, 400);    // متتبّع عداد DOM (احتياطي) + مرساة الطور
     setInterval(strategyLoop, 60);      // حلقة الاستراتيجية عالية الدقة (~60ms)
     setInterval(updateHUD, 250);
-    log('🔌 اعتراض WSS مُفعّل (ORACLE/MAIN).', 'info');
+    setInterval(streamWatchdog, 1000);  // مراقب انقطاع التدفق
+    log('🔌 اعتراض WSS مُفعّل (ORACLE=events-po / MAIN=po.market).', 'info');
+    log('🕯️ عداد الشمعة يُقرأ من WSS (chafor) — لا حاجة للكانفاس.', 'info');
   }
 
   if (document.readyState === 'loading') {
