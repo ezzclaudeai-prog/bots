@@ -399,7 +399,11 @@
   // ══════════════════════════════════════════════════════════════════════
   // § 10  UI — Spy Panel
   // ══════════════════════════════════════════════════════════════════════
-  let _ui = null, _logEl = null, _rawEl = null, _hudEl = null;
+  let _ui = null, _body = null, _logEl = null, _rawEl = null, _hudEl = null, _restoreBtn = null;
+  const LS_KEY = 'eo_spy_ui_v1';
+  let _uiState = { left: null, top: null, w: 520, h: null, collapsed: false, hidden: false, opacity: 1 };
+  function loadUIState() { try { Object.assign(_uiState, JSON.parse(W.localStorage.getItem(LS_KEY)) || {}); } catch (_) {} }
+  function saveUIState() { try { W.localStorage.setItem(LS_KEY, JSON.stringify(_uiState)); } catch (_) {} }
   function addLog(msg, type) {
     if (!_logEl) { try { console.log('[EO-SPY]', msg); } catch (_) {} return; }
     const row = document.createElement('div');
@@ -434,29 +438,106 @@
       '<br><span style="color:#9ab;font-size:10px">رصيد: <b>' + (curBalance() ?? '—') + '</b> (' + (isDemo ? 'تجريبي' : 'حقيقي') + ')' +
       ' | ticks ' + totalTicks + ' | إطارات ' + totalFrames + ' | مفتوحة ' + _openTrades.size + ' | أصول ' + _assetsById.size + '</span>';
   }
-  function mkBtn(txt, fn) { const b = document.createElement('button'); b.textContent = txt; b.style.cssText = 'flex:0 0 auto;padding:3px 8px;font:11px sans-serif;background:#1a1a33;color:#cce;border:1px solid #33335a;border-radius:4px;cursor:pointer'; b.onclick = fn; return b; }
+  function mkBtn(txt, fn, title) { const b = document.createElement('button'); b.textContent = txt; if (title) b.title = title; b.style.cssText = 'flex:0 0 auto;padding:3px 8px;font:11px sans-serif;background:#1a1a33;color:#cce;border:1px solid #33335a;border-radius:4px;cursor:pointer'; b.onclick = fn; return b; }
+  function mkWinBtn(txt, fn, title) { const b = document.createElement('button'); b.textContent = txt; b.title = title || ''; b.style.cssText = 'width:22px;height:22px;padding:0;font:12px sans-serif;background:#23234a;color:#cce;border:1px solid #3a3a66;border-radius:4px;cursor:pointer;line-height:1'; b.onclick = (e) => { e.stopPropagation(); fn(); }; return b; }
+
+  function applyUIState() {
+    if (!_ui) return;
+    const s = _uiState;
+    if (s.left != null) { _ui.style.left = s.left + 'px'; _ui.style.top = s.top + 'px'; _ui.style.right = 'auto'; }
+    if (s.w) _ui.style.width = s.w + 'px';
+    _ui.style.height = (s.collapsed || !s.h) ? 'auto' : s.h + 'px';
+    _ui.style.opacity = s.opacity;
+    _body.style.display = s.collapsed ? 'none' : 'flex';
+    _ui.style.display = s.hidden ? 'none' : 'flex';
+    if (_restoreBtn) _restoreBtn.style.display = s.hidden ? 'block' : 'none';
+  }
+  function toggleCollapse() { _uiState.collapsed = !_uiState.collapsed; applyUIState(); saveUIState(); }
+  function cycleOpacity() { const seq = [1, 0.7, 0.4]; _uiState.opacity = seq[(seq.indexOf(_uiState.opacity) + 1) % seq.length]; applyUIState(); saveUIState(); }
+  function hidePanel() { _uiState.hidden = true; applyUIState(); saveUIState(); }
+  function showPanel() { _uiState.hidden = false; applyUIState(); saveUIState(); }
+
+  function makeDraggable(handle) {
+    let sx, sy, ox, oy, drag = false;
+    handle.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button')) return;
+      drag = true; sx = e.clientX; sy = e.clientY;
+      const r = _ui.getBoundingClientRect(); ox = r.left; oy = r.top;
+      _ui.style.right = 'auto'; _ui.style.left = ox + 'px'; _ui.style.top = oy + 'px';
+      e.preventDefault();
+    });
+    W.addEventListener('mousemove', (e) => {
+      if (!drag) return;
+      let nx = ox + (e.clientX - sx), ny = oy + (e.clientY - sy);
+      nx = Math.max(0, Math.min(nx, W.innerWidth - 60));
+      ny = Math.max(0, Math.min(ny, W.innerHeight - 28));
+      _ui.style.left = nx + 'px'; _ui.style.top = ny + 'px';
+    });
+    W.addEventListener('mouseup', () => {
+      if (!drag) return; drag = false;
+      const r = _ui.getBoundingClientRect(); _uiState.left = r.left; _uiState.top = r.top; saveUIState();
+    });
+  }
+
   function buildUI() {
     if (!CFG.UI_ENABLED || _ui) return;
+    loadUIState();
+
     _ui = document.createElement('div');
-    _ui.style.cssText = 'position:fixed;top:8px;right:8px;width:520px;z-index:2147483647;background:#0d0d18;border:1px solid #2a2a44;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,.6);font-family:system-ui,sans-serif;color:#ccd';
-    _hudEl = document.createElement('div'); _hudEl.style.cssText = 'padding:6px 8px;font:11px monospace;border-bottom:1px solid #2a2a44;background:#11112a';
-    const tabs = document.createElement('div'); tabs.style.cssText = 'display:flex;gap:4px;padding:4px 6px;border-bottom:1px solid #2a2a44;flex-wrap:wrap';
-    _logEl = document.createElement('div'); _logEl.style.cssText = 'height:130px;overflow:auto;background:#0a0a14';
-    _rawEl = document.createElement('div'); _rawEl.style.cssText = 'height:200px;overflow:auto;background:#08080f;border-top:1px solid #2a2a44';
+    _ui.style.cssText = 'position:fixed;top:8px;right:8px;width:520px;min-width:280px;min-height:0;max-height:92vh;z-index:2147483646;display:flex;flex-direction:column;overflow:hidden;resize:both;background:#0d0d18;border:1px solid #2a2a44;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,.6);font-family:system-ui,sans-serif;color:#ccd';
 
-    tabs.appendChild(mkBtn('▲ CALL', () => executeTrade('call')));
-    tabs.appendChild(mkBtn('▼ PUT', () => executeTrade('put')));
-    tabs.appendChild(mkBtn('📋 ملخص', () => { navigator.clipboard?.writeText(JSON.stringify({ byAction: Diag.counts.byAction, byMethod: Diag.counts.byMethod, decodeStats: _decodeStats }, null, 2)); addLog('📋 نُسخ الملخص', 'info'); }));
-    tabs.appendChild(mkBtn('⬇️ تصدير', () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([Diag.export()], { type: 'application/json' })); a.download = 'eo_traffic_' + Date.now() + '.json'; a.click(); addLog('⬇️ صُدّر ' + Diag.packets.length + ' حزمة', 'info'); }));
-    tabs.appendChild(mkBtn('🗑️ مسح', () => { Diag.clear(); if (_rawEl) _rawEl.innerHTML = ''; addLog('🗑️ مُسح', 'info'); }));
-    tabs.appendChild(mkBtn('▁', () => { const h = _logEl.style.display === 'none'; _logEl.style.display = _rawEl.style.display = h ? 'block' : 'none'; }));
+    // ─── شريط العنوان (مقبض السحب + أزرار النافذة) ───
+    const bar = document.createElement('div');
+    bar.style.cssText = 'flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:4px 8px;background:#1a1a3a;cursor:move;border-bottom:1px solid #2a2a44;user-select:none';
+    const title = document.createElement('span'); title.innerHTML = '🛰️ <b>EO-SPY</b> <span style="color:#667;font-size:10px">v0.3</span>'; title.style.cssText = 'font:12px sans-serif;color:#cce';
+    const ctrls = document.createElement('div'); ctrls.style.cssText = 'display:flex;gap:4px';
+    ctrls.append(
+      mkWinBtn('🌓', cycleOpacity, 'شفافية'),
+      mkWinBtn('▁', toggleCollapse, 'تصغير/تكبير'),
+      mkWinBtn('✕', hidePanel, 'إخفاء (Alt+S لإظهارها)'),
+    );
+    bar.append(title, ctrls);
 
-    const rawHdr = document.createElement('div'); rawHdr.style.cssText = 'padding:3px 8px;font:10px monospace;color:#778;background:#11111e;border-top:1px solid #2a2a44';
-    rawHdr.textContent = '── RAW WS LOG (ضوضاء candles/ping مكتومة — مرّر للتفاصيل) ──';
-    _ui.append(_hudEl, tabs, _logEl, rawHdr, _rawEl);
+    // ─── الجسم (يُخفى عند التصغير) ───
+    _body = document.createElement('div');
+    _body.style.cssText = 'flex:1 1 auto;display:flex;flex-direction:column;overflow:hidden;min-height:0';
+    _hudEl = document.createElement('div'); _hudEl.style.cssText = 'flex:0 0 auto;padding:6px 8px;font:11px monospace;border-bottom:1px solid #2a2a44;background:#11112a';
+    const tabs = document.createElement('div'); tabs.style.cssText = 'flex:0 0 auto;display:flex;gap:4px;padding:4px 6px;border-bottom:1px solid #2a2a44;flex-wrap:wrap';
+    _logEl = document.createElement('div'); _logEl.style.cssText = 'flex:1 1 35%;min-height:34px;overflow:auto;background:#0a0a14';
+    _rawEl = document.createElement('div'); _rawEl.style.cssText = 'flex:1 1 45%;min-height:34px;overflow:auto;background:#08080f;border-top:1px solid #2a2a44';
+
+    tabs.append(
+      mkBtn('▲ CALL', () => executeTrade('call'), 'فتح صفقة صعود'),
+      mkBtn('▼ PUT', () => executeTrade('put'), 'فتح صفقة هبوط'),
+      mkBtn('📋 ملخص', () => { navigator.clipboard?.writeText(JSON.stringify({ byAction: Diag.counts.byAction, byMethod: Diag.counts.byMethod, decodeStats: _decodeStats }, null, 2)); addLog('📋 نُسخ الملخص', 'info'); }),
+      mkBtn('⬇️ تصدير', () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([Diag.export()], { type: 'application/json' })); a.download = 'eo_traffic_' + Date.now() + '.json'; a.click(); addLog('⬇️ صُدّر ' + Diag.packets.length + ' حزمة', 'info'); }),
+      mkBtn('🗑️ مسح', () => { Diag.clear(); if (_rawEl) _rawEl.innerHTML = ''; addLog('🗑️ مُسح', 'info'); }),
+    );
+
+    const rawHdr = document.createElement('div'); rawHdr.style.cssText = 'flex:0 0 auto;padding:3px 8px;font:10px monospace;color:#778;background:#11111e;border-top:1px solid #2a2a44';
+    rawHdr.textContent = '── RAW WS LOG (candles/ping مكتومة — مرّر للتفاصيل) ──';
+
+    _body.append(_hudEl, tabs, _logEl, rawHdr, _rawEl);
+    _ui.append(bar, _body);
     document.documentElement.appendChild(_ui);
+
+    // ─── زر عائم لإعادة الإظهار بعد الإخفاء ───
+    _restoreBtn = document.createElement('div');
+    _restoreBtn.textContent = '🛰️'; _restoreBtn.title = 'إظهار EO-SPY';
+    _restoreBtn.style.cssText = 'position:fixed;bottom:14px;right:14px;z-index:2147483647;width:36px;height:36px;border-radius:50%;background:#1a1a3a;border:1px solid #3a3a66;color:#cce;font-size:17px;line-height:36px;text-align:center;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.6);display:none';
+    _restoreBtn.onclick = showPanel;
+    document.documentElement.appendChild(_restoreBtn);
+
+    // سحب + حفظ الحجم عند تغييره + اختصار Alt+S
+    makeDraggable(bar);
+    if (typeof W.ResizeObserver === 'function') {
+      new W.ResizeObserver(() => { if (!_uiState.collapsed && _ui.style.display !== 'none') { _uiState.w = _ui.offsetWidth; _uiState.h = _ui.offsetHeight; saveUIState(); } }).observe(_ui);
+    }
+    W.addEventListener('keydown', (e) => { if (e.altKey && (e.key === 's' || e.key === 'S')) { e.preventDefault(); _uiState.hidden ? showPanel() : hidePanel(); } });
+
+    applyUIState();
     updateHud();
-    addLog('🛰️ EO-SPY v0.3 جاهز — بروتوكول ExpertOption مفكوك بالكامل', 'signal');
+    addLog('🛰️ EO-SPY v0.3 جاهز — اسحب الشريط العلوي لنقلها، ✕ لإخفائها (Alt+S)', 'signal');
   }
 
   // ══════════════════════════════════════════════════════════════════════
