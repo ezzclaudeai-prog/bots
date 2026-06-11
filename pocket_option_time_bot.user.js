@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ⏱️ PO TIME-CLICK BOT — M1 Timed Strategy + Predictive Momentum + DOM Click Execution
 // @namespace    pocket-option-time-click-bot
-// @version      1.0.0
+// @version      1.1.0
 // @description  بوت تداول ذاتي لمنصة بوكيت أوبشن: استخراج تلقائي للأزرار وعمر الصفقة وعمر شمعة M1، استراتيجية زمنية (ث36/26/11)، فلتر زخم تنبّئي من مقابس ORACLE/MAIN، نظام تجميد زمني لحماية رأس المال، والتنفيذ حصراً عبر محاكاة النقر الفيزيائي على أزرار الشراء/البيع. يعمل بالكامل بدون كونسول (Kiwi Browser + Violentmonkey).
 // @author       aoirusra
 // @match        *://pocketoption.com/*
@@ -307,9 +307,26 @@
 
   function trimOld(arr, cutoff) { while (arr.length && arr[0].t < cutoff) arr.shift(); }
 
-  function candleIndex() { return Math.floor(serverNow() / (CFG.CANDLE_SEC * 1000)); }
-  function secInCandle()  { return Math.floor((serverNow() % (CFG.CANDLE_SEC * 1000)) / 1000); }
-  function msInCandle()   { return serverNow() % (CFG.CANDLE_SEC * 1000); }
+  // مرساة العداد التنازلي من الواجهة (M1 00:24): أدق مصدر لعمر الشمعة.
+  // تُحدَّث عند كل «قفزة ثانية» للعداد — لحظة القفزة = رأس ثانية مضبوطة.
+  let _domAnchor = null;   // { elapsedMs0, t0 }
+  function _candleMs() {
+    const P = CFG.CANDLE_SEC * 1000;
+    if (_domAnchor && (now() - _domAnchor.t0) < 130000) {
+      return (((_domAnchor.elapsedMs0 + (now() - _domAnchor.t0)) % P) + P) % P;
+    }
+    return ((serverNow() % P) + P) % P;
+  }
+  function candleIndex() {
+    const P = CFG.CANDLE_SEC * 1000;
+    if (_domAnchor && (now() - _domAnchor.t0) < 130000) {
+      const elapsed = _domAnchor.elapsedMs0 + (now() - _domAnchor.t0);
+      return Math.floor((_domAnchor.t0 - _domAnchor.elapsedMs0) / P) + Math.floor(elapsed / P);
+    }
+    return Math.floor(serverNow() / P);
+  }
+  function secInCandle() { return Math.floor(_candleMs() / 1000); }
+  function msInCandle()  { return _candleMs(); }
 
   function updateCandle(price) {
     const idx = candleIndex();
@@ -400,9 +417,26 @@
       DOM.buyBtn  = findTradeButton('buy');
       DOM.sellBtn = findTradeButton('sell');
       DOM.durInput= findDurationInput();
-      DOM.countdownEl = findCountdownEl();
+      // DOM.countdownEl يديره countdownPoll (تحقّق سلوكي: عداد يتناقص فعلاً)
     } catch (_) {}
     updateHUD();
+  }
+
+  // مسار CSS مختصر للعنصر — للتقرير التشخيصي
+  function cssPath(el) {
+    const parts = [];
+    let e = el;
+    while (e && e.nodeType === 1 && parts.length < 8) {
+      let s = e.tagName.toLowerCase();
+      if (e.id) { parts.unshift(s + '#' + e.id); break; }
+      const cls = (e.className && e.className.toString ? e.className.toString() : '').trim().split(/\s+/).filter(Boolean).slice(0, 2);
+      if (cls.length) s += '.' + cls.join('.');
+      const p = e.parentElement;
+      if (p) s += ':nth-child(' + (Array.prototype.indexOf.call(p.children, e) + 1) + ')';
+      parts.unshift(s);
+      e = p;
+    }
+    return parts.join('>');
   }
 
   function visible(el) {
@@ -415,8 +449,9 @@
 
   function findTradeButton(kind) {
     // kind: 'buy' (شراء/أخضر/call/up) | 'sell' (بيع/أحمر/put/down)
-    const buyWords  = ['شراء','call','buy','up','higher','أعلى'];
-    const sellWords = ['بيع','put','sell','down','lower','أدنى'];
+    // الكلمات والأسهم مأخوذة من نسخ البوتات القديمة في الريبو (_animatePlatformButton)
+    const buyWords  = ['شراء','call','buy','up','higher','أعلى','↑'];
+    const sellWords = ['بيع','put','sell','down','lower','أدنى','↓'];
     const words = kind === 'buy' ? buyWords : sellWords;
     const antiWords = kind === 'buy' ? sellWords : buyWords;
 
@@ -469,14 +504,38 @@
     return null;
   }
 
+  // هل القيمة hh:mm:ss تطابق ساعة حائطية (محلية/UTC/UTC+3)؟ — لاستبعاد ساعات المنصة
+  function _looksLikeWallClock(h, mi) {
+    const d = new Date();
+    const checks = [
+      [d.getHours(), d.getMinutes()],
+      [d.getUTCHours(), d.getUTCMinutes()],
+      [(d.getUTCHours() + 3) % 24, d.getUTCMinutes()],
+    ];
+    return checks.some(([hh, mm]) => hh === h && Math.abs(mm - mi) <= 2);
+  }
+
+  function _parseDurStr(val) {
+    const m = String(val || '').trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!m) return 0;
+    const secs = m[3] != null ? (+m[1])*3600 + (+m[2])*60 + (+m[3]) : (+m[1])*60 + (+m[2]);
+    if (secs < 1 || secs > 3600) return 0;
+    if (m[3] != null && _looksLikeWallClock(+m[1], +m[2])) return 0;   // استبعاد «00:55:34» (ساعة UTC)
+    return secs;
+  }
+
   function findDurationInput() {
-    // خانة "الزمن"/عمر الصفقة (مثل 00:00:05). نبحث عن حقل قيمته بصيغة وقت قرب كلمة الزمن.
-    const timeRe = /(\d{1,2}):(\d{2})(?::(\d{2}))?/;
-    const inputs = Array.from(document.querySelectorAll('input, [contenteditable="true"], [class*="time"], [class*="duration"], [class*="expir"]'));
-    for (const el of inputs) {
-      if (!visible(el)) continue;
-      const val = (el.value || el.textContent || '').trim();
-      if (timeRe.test(val) && val.length <= 10) return el;
+    // خانة "الزمن"/عمر الصفقة (مثل 00:00:05) — حقول إدخال فقط، لا نصوص الساعة
+    const pools = [
+      Array.from(document.querySelectorAll('input')),
+      Array.from(document.querySelectorAll('[contenteditable="true"]')),
+    ];
+    for (const pool of pools) {
+      for (const el of pool) {
+        if (!visible(el)) continue;
+        const val = (el.value != null && el.value !== '' ? el.value : el.textContent || '').trim();
+        if (_parseDurStr(val) > 0) return el;
+      }
     }
     return null;
   }
@@ -484,39 +543,45 @@
   // يقرأ عمر الصفقة من الواجهة (بالثواني) — كتأكيد لـ WSS
   function domTradeDur() {
     const el = DOM.durInput; if (!el) return 0;
-    const val = (el.value || el.textContent || '').trim();
-    const m = val.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-    if (!m) return 0;
-    if (m[3] != null) return (+m[1])*3600 + (+m[2])*60 + (+m[3]);
-    return (+m[1])*60 + (+m[2]);   // mm:ss
+    const val = (el.value != null && el.value !== '' ? el.value : el.textContent || '').trim();
+    return _parseDurStr(val);
   }
 
-  function findCountdownEl() {
-    // العداد التنازلي للشمعة بجوار وسم الإطار (M1 00:24). نبحث عن نص "00:24" بصيغة mm:ss يتغيّر.
-    const re = /^\s*[0-5]?\d:[0-5]\d\s*$/;
-    const all = Array.from(document.querySelectorAll('span, div, p, time'));
-    const matches = [];
-    for (const el of all) {
-      if (!visible(el)) continue;
-      if (el.children.length > 0) continue;             // عقدة نصية فقط
-      const t = (el.textContent || '').trim();
-      if (re.test(t)) matches.push(el);
-    }
-    // فضّل العنصر الأقرب لوسم M1/الإطار الزمني
-    for (const el of matches) {
-      const parentTxt = (el.parentElement && el.parentElement.textContent || '').toLowerCase();
-      if (/\bm1\b|m1|التداول|m5|m15/.test(parentTxt)) return el;
-    }
-    return matches[0] || null;
-  }
-
-  // ثواني متبقية من عداد الواجهة (تأكيد لساعة الخادم)
-  function domCandleRemain() {
-    const el = DOM.countdownEl; if (!el) return null;
-    const t = (el.textContent || '').trim();
-    const m = t.match(/^([0-5]?\d):([0-5]\d)$/);
-    if (!m) return null;
-    return (+m[1])*60 + (+m[2]);
+  // ── متتبّع العداد التنازلي للشمعة (تحقّق سلوكي) ──────────────────────
+  //   بدل التخمين بالنص فقط: نراقب كل عناصر mm:ss الورقية ونرفع نقاط العنصر
+  //   الذي «يتناقص ثانية كل ثانية» فعلاً. لحظة قفزة قيمته = مرساة طور دقيقة.
+  const _cdCands = new Map();   // path → { el, lastVal, lastT, decScore }
+  function countdownPoll() {
+    try {
+      const re = /^([0-5]?\d):([0-5]\d)$/;
+      const els = document.querySelectorAll('span, div, p, time, b, strong');
+      for (const el of els) {
+        if (el.children.length > 0) continue;
+        const t = (el.textContent || '').trim();
+        const m = t.match(re); if (!m) continue;
+        if (!visible(el)) continue;
+        if (hudEl && hudEl.contains(el)) continue;
+        const val = (+m[1]) * 60 + (+m[2]);
+        const path = cssPath(el);
+        let c = _cdCands.get(path);
+        if (!c) { _cdCands.set(path, { el, lastVal: val, lastT: now(), decScore: 0 }); continue; }
+        c.el = el;
+        if (val !== c.lastVal) {
+          const dt = now() - c.lastT;
+          const dv = c.lastVal - val;
+          if (dv >= 1 && dv <= 3 && dt > 350 && dt < 4000) c.decScore = Math.min(c.decScore + dv, 50);          // تناقص طبيعي
+          else if (val > c.lastVal && c.lastVal <= 2)      c.decScore = Math.min(c.decScore + 1, 50);          // إعادة دورة 00→59 (شمعة جديدة)
+          else                                              c.decScore = Math.max(c.decScore - 2, 0);
+          if (c.decScore >= 3 && val < CFG.CANDLE_SEC) {
+            // عداد مؤكد — لحظة القفزة = رأس الثانية: المتبقي = val ⇐ المنقضي = 60-val
+            if (DOM.countdownEl !== el) { DOM.countdownEl = el; log('⏲️ عداد الشمعة مؤكد: ' + path, 'signal'); }
+            _domAnchor = { elapsedMs0: (CFG.CANDLE_SEC - val) * 1000, t0: now() };
+          }
+          c.lastVal = val; c.lastT = now();
+        }
+      }
+      for (const [p, c] of _cdCands) if (now() - c.lastT > 180000) _cdCands.delete(p);
+    } catch (_) {}
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -526,30 +591,47 @@
     if (!el) return false;
     try {
       const r = el.getBoundingClientRect();
-      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-      const base = { bubbles: true, cancelable: true, composed: true, view: W, clientX: cx, clientY: cy, button: 0 };
-      const seq = [
-        ['pointerover', PointerEvent], ['pointerenter', PointerEvent],
-        ['mouseover', MouseEvent], ['mousemove', MouseEvent],
-        ['pointerdown', PointerEvent], ['mousedown', MouseEvent],
-        ['pointerup', PointerEvent], ['mouseup', MouseEvent],
-        ['click', MouseEvent],
-      ];
-      for (const [type, Ctor] of seq) {
-        let ev;
-        try {
-          ev = new Ctor(type, type.startsWith('pointer')
-            ? Object.assign({ pointerId: 1, pointerType: 'touch', isPrimary: true }, base)
-            : base);
-        } catch (_) { ev = new MouseEvent(type, base); }
-        el.dispatchEvent(ev);
-      }
-      // محاولة لمس فعلي إضافية (هواتف)
+      const cx = Math.round(r.left + r.width / 2), cy = Math.round(r.top + r.height / 2);
+      // استهدف أعمق عنصر عند مركز الزر — أُطر الواجهة تربط المستمعات بعناصر داخلية
+      let tgt = null;
+      try { tgt = document.elementFromPoint(cx, cy); } catch (_) {}
+      if (!tgt || !(el === tgt || el.contains(tgt))) tgt = el;
+
+      const base = { bubbles: true, cancelable: true, composed: true, view: W,
+                     clientX: cx, clientY: cy, screenX: cx, screenY: cy, button: 0 };
+      const fire = (type, Ctor, extra) => {
+        try { tgt.dispatchEvent(new Ctor(type, Object.assign({}, base, extra || {}))); }
+        catch (_) { try { tgt.dispatchEvent(new MouseEvent(type, base)); } catch (__) {} }
+      };
+
+      // 1) لمس حقيقي بكائنات Touch فعلية — المسار الأساسي على الهاتف
       try {
-        const touchOpts = { bubbles:true, cancelable:true, composed:true, view:W };
-        el.dispatchEvent(new TouchEvent('touchstart', touchOpts));
-        el.dispatchEvent(new TouchEvent('touchend', touchOpts));
+        const touch = new Touch({
+          identifier: Date.now() % 100000, target: tgt,
+          clientX: cx, clientY: cy, screenX: cx, screenY: cy,
+          pageX: cx + (W.scrollX || 0), pageY: cy + (W.scrollY || 0),
+          radiusX: 11, radiusY: 11, force: 1,
+        });
+        const tBase = { bubbles: true, cancelable: true, composed: true, view: W };
+        tgt.dispatchEvent(new TouchEvent('touchstart', Object.assign({ touches: [touch], targetTouches: [touch], changedTouches: [touch] }, tBase)));
+        tgt.dispatchEvent(new TouchEvent('touchend',   Object.assign({ touches: [],      targetTouches: [],      changedTouches: [touch] }, tBase)));
       } catch (_) {}
+
+      // 2) سلسلة pointer/mouse كاملة على العنصر العميق
+      const pExtra = { pointerId: 1, pointerType: 'touch', isPrimary: true, width: 22, height: 22, pressure: 1 };
+      fire('pointerover',  PointerEvent, pExtra);
+      fire('pointerenter', PointerEvent, pExtra);
+      fire('pointerdown',  PointerEvent, Object.assign({ buttons: 1 }, pExtra));
+      fire('mouseover', MouseEvent);
+      fire('mousemove', MouseEvent);
+      fire('mousedown', MouseEvent, { buttons: 1 });
+      try { if (tgt.focus) tgt.focus(); } catch (_) {}
+      fire('pointerup', PointerEvent, pExtra);
+      fire('mouseup', MouseEvent);
+      fire('click', MouseEvent, { detail: 1 });
+
+      // 3) احتياط: click مباشر على الزر الأصلي أيضاً
+      if (tgt !== el) { try { el.dispatchEvent(new MouseEvent('click', base)); } catch (_) {} }
       if (typeof el.click === 'function') { try { el.click(); } catch (_) {} }
       return true;
     } catch (_) { return false; }
@@ -669,6 +751,52 @@
     }
   }
 
+  // ── تصدير HTML كامل + تقرير تشخيصي (ملف txt قابل للتنزيل — بدون كونسول) ──
+  function _snip(el, n) {
+    try { return el ? el.outerHTML.slice(0, n || 500).replace(/\s+/g, ' ') : 'null'; } catch (_) { return '?'; }
+  }
+  function buildDomReport() {
+    const lines = [];
+    lines.push('== PO TIME-CLICK BOT — DOM REPORT v1.1 == ' + new Date().toISOString());
+    lines.push('url=' + location.href);
+    lines.push('asset=' + (activeAsset || '?') +
+      ' | tradeDur(used)=' + tradeDurSec() + 's | wssDur=' + _tradeDurationSec + 's | domDur=' + domTradeDur() + 's' +
+      ' | secInCandle=' + (activeAsset ? secInCandle() : '-') +
+      ' | anchor=' + (_domAnchor ? ('fresh ' + Math.round((now() - _domAnchor.t0) / 1000) + 's ago') : 'NONE (server clock only)'));
+    lines.push('');
+    lines.push('[BUY ] ' + (DOM.buyBtn  ? cssPath(DOM.buyBtn)  + '\n       ' + _snip(DOM.buyBtn)  : 'NOT FOUND'));
+    lines.push('[SELL] ' + (DOM.sellBtn ? cssPath(DOM.sellBtn) + '\n       ' + _snip(DOM.sellBtn) : 'NOT FOUND'));
+    lines.push('[DUR ] ' + (DOM.durInput ? cssPath(DOM.durInput) + '\n       ' + _snip(DOM.durInput) : 'NOT FOUND'));
+    lines.push('[CNTD] ' + (DOM.countdownEl ? cssPath(DOM.countdownEl) + '\n       ' + _snip(DOM.countdownEl) : 'NOT FOUND'));
+    lines.push('');
+    lines.push('-- countdown candidates (decScore = ثبت أنه يتناقص) --');
+    for (const [p, c] of _cdCands) lines.push('  score=' + c.decScore + ' last=' + c.lastVal + 's  ' + p);
+    lines.push('');
+    lines.push('-- recent log --');
+    for (const l of logBuf.slice(-50)) lines.push('  ' + l.line);
+    return lines.join('\n');
+  }
+  function downloadHTML() {
+    try {
+      let html = '';
+      try {
+        const clone = document.documentElement.cloneNode(true);
+        const hud = clone.querySelector('#po-time-bot-hud');
+        if (hud) hud.remove();   // لا تلوّث اللقطة بواجهة البوت
+        html = clone.outerHTML;
+      } catch (_) { html = document.documentElement.outerHTML; }
+      const txt = '/*\n' + buildDomReport() + '\n*/\n\n' + html;
+      const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'po_page_' + new Date().toISOString().replace(/[:.]/g, '-') + '.txt';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      log('📄 تم تنزيل HTML + التقرير (' + Math.round(txt.length / 1024) + 'KB)', 'signal');
+    } catch (e) { log('⛔ فشل تنزيل HTML: ' + (e && e.message), 'error'); }
+  }
+
   function fmtRemain(ms) {
     if (ms <= 0) return '00:00';
     const s = Math.ceil(ms/1000); const m = Math.floor(s/60);
@@ -735,6 +863,7 @@
     row.appendChild(mkBtn('مسح DOM', '#2c3e50', () => { scanDOM(); log('🔍 إعادة مسح الواجهة', 'info'); }));
     row.appendChild(mkBtn('اختبار شراء', '#16a085', () => { physicalClick(DOM.buyBtn) ? log('🧪 نقر شراء تجريبي','trade') : log('⛔ لا زر شراء','error'); }));
     row.appendChild(mkBtn('اختبار بيع', '#8e44ad', () => { physicalClick(DOM.sellBtn) ? log('🧪 نقر بيع تجريبي','trade') : log('⛔ لا زر بيع','error'); }));
+    row.appendChild(mkBtn('📄 تنزيل HTML', '#d35400', downloadHTML));
     hudEl.appendChild(row);
 
     logEl = document.createElement('div');
@@ -775,6 +904,7 @@
     buildHUD();
     scanDOM();
     setInterval(scanDOM, CFG.RESCAN_DOM_MS);
+    setInterval(countdownPoll, 400);    // متتبّع عداد الشمعة + مرساة الطور
     setInterval(strategyLoop, 60);      // حلقة الاستراتيجية عالية الدقة (~60ms)
     setInterval(updateHUD, 250);
     log('🔌 اعتراض WSS مُفعّل (ORACLE/MAIN).', 'info');
