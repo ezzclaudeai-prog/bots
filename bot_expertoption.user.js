@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🛰️ EXPERTOPTION_ENGINE — WS Interceptor + Protocol Decoder + Trade Engine + Risk Guard + Signal Orb
 // @namespace    expertoption-trade-engine
-// @version      1.1.0
+// @version      1.2.0
 // @description  ExpertOption trading bot — intercepts the native JSON WebSocket protocol (candles / profile / trade lifecycle), tracks ticks·balance·active-asset, runs an adaptive signal engine, protects capital (% risk sizing, daily drawdown, loss-streak pause/halt), executes trades via the verified buyOption format, and shows a draggable panel + liquid-glass signal orb.
 // @author       aoirusra
 // @match        *://expertoption.com/*
@@ -134,10 +134,11 @@
   let _lastAutoTradeMs = 0;
   const _botNs         = new Set();   // ns of trades sent through this tool
   const _botTradeIds   = new Set();   // tradeIds confirmed as bot trades
+  const _buyTemplates  = { call: null, put: null, _any: null };   // real buyOption message learned from manual trades
 
   // ─── stats / streak ───
   const STATS = { trades: 0, wins: 0, losses: 0, pnl: 0, lossStreak: 0, winStreak: 0, bestStreak: 0 };
-  const BOT   = { trades: 0, wins: 0, losses: 0, pnl: 0 };
+  const BOT   = { trades: 0, wins: 0, losses: 0, pnl: 0, lossStreak: 0, winStreak: 0 };
   let _pauseUntil = 0;                // streak pause expiry (ms)
 
   function symOf(id) { const a = _assetsById.get(id); return a ? a.symbol : ('#' + id); }
@@ -191,20 +192,25 @@
 
   // record a settled trade outcome → streak + pause/halt logic
   function recordResult(win, resultAmount, isBot) {
+    // STATS = every trade observed on the account (manual taps included) — informational only
     STATS.trades++; STATS.pnl += resultAmount;
-    if (win) {
-      STATS.wins++; STATS.winStreak++; STATS.lossStreak = 0;
-      if (STATS.winStreak > STATS.bestStreak) STATS.bestStreak = STATS.winStreak;
-    } else {
-      STATS.losses++; STATS.lossStreak++; STATS.winStreak = 0;
-      if (STATS.lossStreak >= CFG.STREAK_HALT_LOSSES) {
-        RiskManager.halt(STATS.lossStreak + ' consecutive losses');
-      } else if (STATS.lossStreak >= CFG.STREAK_PAUSE_LOSSES) {
-        _pauseUntil = nowMs() + CFG.STREAK_PAUSE_MS;
-        addLog('⛔ [STREAK] ' + STATS.lossStreak + ' consecutive losses — paused ' + (CFG.STREAK_PAUSE_MS / 1000) + 's', 'error');
+    if (win) { STATS.wins++; STATS.winStreak++; STATS.lossStreak = 0; if (STATS.winStreak > STATS.bestStreak) STATS.bestStreak = STATS.winStreak; }
+    else { STATS.losses++; STATS.lossStreak++; STATS.winStreak = 0; }
+
+    // the streak guard reacts ONLY to the bot's own trades — a human trading manually
+    // on the platform must never pause or halt the bot.
+    if (isBot) {
+      BOT.trades++; BOT.pnl += resultAmount;
+      if (win) { BOT.wins++; BOT.winStreak++; BOT.lossStreak = 0; }
+      else {
+        BOT.losses++; BOT.lossStreak++; BOT.winStreak = 0;
+        if (BOT.lossStreak >= CFG.STREAK_HALT_LOSSES) RiskManager.halt(BOT.lossStreak + ' consecutive bot losses');
+        else if (BOT.lossStreak >= CFG.STREAK_PAUSE_LOSSES) {
+          _pauseUntil = nowMs() + CFG.STREAK_PAUSE_MS;
+          addLog('⛔ [STREAK] ' + BOT.lossStreak + ' consecutive bot losses — paused ' + (CFG.STREAK_PAUSE_MS / 1000) + 's', 'error');
+        }
       }
     }
-    if (isBot) { BOT.trades++; BOT.pnl += resultAmount; win ? BOT.wins++ : BOT.losses++; }
     RiskManager.checkDaily();
   }
 
@@ -512,6 +518,7 @@
         else if (ArrayBuffer.isView(data)) { const b = new Uint8Array(data.buffer, data.byteOffset, data.byteLength); txt = tryUtf8(b); size = b.length; }
         const d = txt ? safeJSONParse(txt) : null;
         if (d && d.token) { lastToken = d.token; if (d.action) { tradeWS = ws; tradeWSOrig = origSend; } }  // socket carrying platform commands = confirmed trade socket
+        if (d && d.action === 'buyOption' && !(d.ns != null && _botNs.has(d.ns))) learnBuyTemplate(d);     // learn the real format from manual trades (not the bot's own)
         Diag.record('OUT', typeof data === 'string' ? 'text' : 'binary', size, d ? { method: 'json', value: d } : null);
       } catch (_) {}
       return origSend(data);
@@ -537,10 +544,43 @@
   // ══════════════════════════════════════════════════════════════════════
   // § 10  TRADE ENGINE  (verified buyOption format)
   // ══════════════════════════════════════════════════════════════════════
+  // detect the direction encoded in a real outgoing buyOption message
+  function detectDir(m) {
+    for (const k in m) { const v = m[k]; if (v === 'call') return 'call'; if (v === 'put') return 'put'; }
+    if (m.type === CFG.TYPE_CALL) return 'call';
+    if (m.type === CFG.TYPE_PUT) return 'put';
+    return null;
+  }
+  // learn the exact buyOption format from a manual (non-bot) trade so the bot can replay it verbatim
+  function learnBuyTemplate(d) {
+    const m = d && d.message;
+    if (!m || typeof m !== 'object') return;
+    const dir = detectDir(m);
+    const copy = JSON.parse(JSON.stringify(m));
+    if (dir) {
+      if (!_buyTemplates[dir]) addLog('📐 learned the real buyOption format from your manual ' + dir.toUpperCase() + ' — the bot will now replay it exactly', 'signal');
+      _buyTemplates[dir] = copy;
+    } else {
+      _buyTemplates._any = copy;
+    }
+  }
+
   function buildOpenPayload(direction, assetId, amount, expSeconds, ns) {
-    return JSON.stringify({
-      action: 'buyOption',
-      message: {
+    const tpl = _buyTemplates[direction] || _buyTemplates._any;
+    let message;
+    if (tpl) {
+      // replay the real platform format, overriding only amount / asset / demo-flag / strike-time
+      message = JSON.parse(JSON.stringify(tpl));
+      for (const k in message) {
+        const v = message[k];
+        if (/amount|sum|invest|bet/i.test(k) && typeof v === 'number') message[k] = amount;
+        else if (/asset/i.test(k)) message[k] = assetId;
+        else if (/is_?demo|^demo$/i.test(k)) message[k] = isDemo;
+        else if (/strike_?time|exp_?time|expire|^time$/i.test(k) && typeof v === 'number' && v > 1e9) message[k] = nowSec();
+      }
+    } else {
+      // fallback format (used until the bot has seen one manual trade to learn from)
+      message = {
         type            : direction === 'put' ? 'put' : 'call',
         amount          : amount,
         assetid         : assetId,                 // lowercase (confirmed from traffic)
@@ -548,10 +588,9 @@
         is_demo         : isDemo,
         expiration_shift: expSeconds,
         ratePosition    : 0,
-      },
-      token: lastToken,
-      ns   : ns != null ? ns : nextNs(),
-    });
+      };
+    }
+    return JSON.stringify({ action: 'buyOption', message, token: lastToken, ns: ns != null ? ns : nextNs() });
   }
 
   // token discovery — independent of catching a rare outgoing frame
@@ -997,7 +1036,7 @@
     $('cbPopupToggle').addEventListener('change', (e) => { CFG.POPUP_ENABLED = e.target.checked; $('cbPopupBadge').textContent = e.target.checked ? 'ON' : 'OFF'; $('cbPopupBadge').style.color = e.target.checked ? '#00d264' : '#7c8d9b'; });
     document.querySelectorAll('.cb-dur-btn').forEach(b => b.addEventListener('click', () => { setDuration(+b.dataset.dur); addLog('⏱️ duration: ' + b.dataset.dur + 's', 'info'); }));
     setDuration(expShift);
-    $('cbResetStats').addEventListener('click', () => { STATS.trades = STATS.wins = STATS.losses = STATS.lossStreak = STATS.winStreak = STATS.bestStreak = 0; STATS.pnl = 0; BOT.trades = BOT.wins = BOT.losses = 0; BOT.pnl = 0; _pauseUntil = 0; addLog('🔄 stats reset', 'info'); });
+    $('cbResetStats').addEventListener('click', () => { STATS.trades = STATS.wins = STATS.losses = STATS.lossStreak = STATS.winStreak = STATS.bestStreak = 0; STATS.pnl = 0; BOT.trades = BOT.wins = BOT.losses = BOT.lossStreak = BOT.winStreak = 0; BOT.pnl = 0; _pauseUntil = 0; addLog('🔄 stats reset', 'info'); });
     $('cbResumeRisk').addEventListener('click', () => RiskManager.resume());
     $('cbExport').addEventListener('click', () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([Diag.export()], { type: 'application/json' })); a.download = 'eo_traffic_' + Date.now() + '.json'; a.click(); addLog('⬇️ exported ' + Diag.packets.length + ' packets', 'info'); });
 
@@ -1088,7 +1127,7 @@
     // stats
     setText('cbWins', String(STATS.wins)); setText('cbLosses', String(STATS.losses));
     setText('cbWinRate', STATS.trades ? Math.round(STATS.wins / STATS.trades * 100) + '%' : '–');
-    setText('cbStreak', STATS.lossStreak ? STATS.lossStreak + 'L' : STATS.winStreak + 'W');
+    setText('cbStreak', BOT.lossStreak ? BOT.lossStreak + 'L🤖' : (BOT.winStreak ? BOT.winStreak + 'W🤖' : '0'));
 
     // signal box
     const box = $('cbSigBox'), main = $('cbSigMain'), sub = $('cbSigSub'), badge = $('cbSigBadge');
