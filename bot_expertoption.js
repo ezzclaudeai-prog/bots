@@ -341,6 +341,8 @@
 
     if (isTradeSocket(urlStr)) {
       if (!tradeWS || tradeWS.readyState !== 1) { tradeWS = ws; tradeWSOrig = origSend; }
+      const um = urlStr.match(/[?&](?:token|auth|access_token)=([a-f0-9]{16,64})/i);  // token من عنوان المقبس
+      if (um && !lastToken) lastToken = um[1];
       addLog('🔌 مقبس تداول: ' + urlStr.split('?')[0], 'info');
     }
 
@@ -351,7 +353,10 @@
         else if (data instanceof ArrayBuffer) { bytes = new Uint8Array(data); txt = tryUtf8(bytes); }
         else if (ArrayBuffer.isView(data)) { bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength); txt = tryUtf8(bytes); }
         const d = txt ? safeJSONParse(txt) : null;
-        if (d && d.token) lastToken = d.token;               // ← التقاط token (صادر ثنائي)
+        if (d && d.token) {
+          lastToken = d.token;                               // ← التقاط token من أي إطار صادر
+          if (d.action) { tradeWS = ws; tradeWSOrig = origSend; }  // ← المقبس الذي يحمل أوامر المنصة = مقبس التداول المؤكد
+        }
         if (bytes) Diag.record('OUT', 'binary', bytes, d ? { method: 'json', value: d } : null);
         else if (txt && (d || txt.length > 2)) Diag.record('OUT', 'text', null, d ? { method: 'text-json', value: d } : { method: 'text', value: null }, txt.length);
       } catch (_) {}
@@ -396,18 +401,41 @@
     });
   }
 
+  // اكتشاف الـ token من مصادر متعددة (لا يعتمد على التقاط إطار صادر نادر)
+  const _TOKEN_RE = /^[a-f0-9]{16,64}$/i;
+  function discoverToken() {
+    // 1) من عنوان مقابس التداول (?token=...)
+    try { for (const ws of _sockets) { const m = String(ws._eoUrl || '').match(/[?&](?:token|auth|access_token)=([a-f0-9]{16,64})/i); if (m) return m[1]; } } catch (_) {}
+    // 2) من localStorage / sessionStorage
+    for (const store of [W.localStorage, W.sessionStorage]) {
+      try {
+        for (let i = 0; i < store.length; i++) {
+          const k = store.key(i), v = store.getItem(k);
+          if (!v) continue;
+          if (/token|auth|access/i.test(k) && _TOKEN_RE.test(v)) return v;            // قيمة مباشرة
+          if (v[0] === '{' || v[0] === '[') { try { const o = JSON.parse(v); const t = o.token || o.access_token || o.authToken || o.authtoken || o.api_token; if (typeof t === 'string' && _TOKEN_RE.test(t)) return t; } catch (_) {} }
+        }
+      } catch (_) {}
+    }
+    // 3) من الكوكيز
+    try { const m = String(document.cookie).match(/(?:token|auth|access_token)=([a-f0-9]{16,64})/i); if (m) return m[1]; } catch (_) {}
+    return null;
+  }
+  function ensureToken() { if (!lastToken) { const t = discoverToken(); if (t) { lastToken = t; addLog('🔑 token اكتُشف تلقائياً', 'info'); } } return lastToken; }
+
   // direction: 'call' (صعود) أو 'put' (هبوط)
   function executeTrade(direction, assetId, amount, expSeconds) {
     const aid = assetId != null ? assetId : activeAssetId;
-    if (aid == null) { addLog('⚠️ لا أصل نشط', 'error'); return false; }
-    if (!tradeWS || tradeWS.readyState !== 1 || !tradeWSOrig) { addLog('⚠️ لا مقبس تداول جاهز', 'error'); return false; }
-    if (!lastToken) { addLog('⚠️ لا token مرصود بعد — تفاعل مع الصفحة أولاً', 'error'); return false; }
-    const payload = buildOpenPayload(direction, aid, amount || tradeAmount, expSeconds || expShift);
+    if (aid == null) { addLog('⚠️ لا أصل نشط — افتح شارت أصل أولاً', 'error'); return false; }
+    if (!tradeWS || tradeWS.readyState !== 1) { addLog('⚠️ لا مقبس تداول مفتوح (state=' + (tradeWS ? tradeWS.readyState : 'null') + ')', 'error'); return false; }
+    if (!ensureToken()) { addLog('⚠️ تعذّر إيجاد token — غيّر الأصل أو الإطار الزمني مرة واحدة لالتقاطه', 'error'); return false; }
+    const amt = amount || tradeAmount, exp = expSeconds || expShift;
+    const payload = buildOpenPayload(direction, aid, amt, exp);
     try {
-      tradeWSOrig(new TextEncoder().encode(payload));        // إرسال ثنائي مطابقاً للمنصة
-      addLog('⚡ تنفيذ: ' + (direction === 'put' ? 'PUT▼' : 'CALL▲') + ' | ' + symOf(aid) + ' | $' + (amount || tradeAmount) + ' | ' + (expSeconds || expShift) + 'ث', 'signal');
+      tradeWS.send(new TextEncoder().encode(payload));      // عبر الهوك → يُسجَّل في الـ traffic للتحقق
+      addLog('⚡ أُرسلت: ' + (direction === 'put' ? 'PUT▼' : 'CALL▲') + ' | ' + symOf(aid) + ' | $' + amt + ' | ' + exp + 'ث | token✓ | ns=' + (_nsCounter - 1), 'signal');
       return true;
-    } catch (e) { addLog('❌ فشل التنفيذ: ' + e.message, 'error'); return false; }
+    } catch (e) { addLog('❌ فشل الإرسال: ' + e.message, 'error'); return false; }
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -455,7 +483,9 @@
       ' | جمهور ' + sent +
       '<br><span style="color:#9ab;font-size:10px">' + live +
       ' | رصيد: <b>' + (curBalance() ?? '—') + '</b> (' + (isDemo ? 'تجريبي' : 'حقيقي') + ')' +
-      ' | ticks ' + totalTicks + ' | إطارات ' + totalFrames + ' | مفتوحة ' + _openTrades.size + ' | أصول ' + _assetsById.size + '</span>';
+      ' | token ' + (lastToken ? '🔑' : '❌') +
+      ' | مقبس ' + (tradeWS && tradeWS.readyState === 1 ? '✓' : '✗') +
+      ' | ticks ' + totalTicks + ' | مفتوحة ' + _openTrades.size + '</span>';
   }
   function mkBtn(txt, fn, title) { const b = document.createElement('button'); b.textContent = txt; if (title) b.title = title; b.style.cssText = 'flex:0 0 auto;padding:3px 8px;font:11px sans-serif;background:#1a1a33;color:#cce;border:1px solid #33335a;border-radius:4px;cursor:pointer'; b.onclick = fn; return b; }
   function mkWinBtn(txt, fn, title) { const b = document.createElement('button'); b.textContent = txt; b.title = title || ''; b.style.cssText = 'width:22px;height:22px;padding:0;font:12px sans-serif;background:#23234a;color:#cce;border:1px solid #3a3a66;border-radius:4px;cursor:pointer;line-height:1'; b.onclick = (e) => { e.stopPropagation(); fn(); }; return b; }
@@ -566,9 +596,11 @@
   function boot() { if (document.documentElement) buildUI(); else W.addEventListener('DOMContentLoaded', buildUI, { once: true }); }
   if (document.readyState === 'loading') W.addEventListener('DOMContentLoaded', boot, { once: true }); else boot();
 
+  setIntervalT(() => { ensureToken(); }, 3000);   // محاولة اكتشاف token دورياً حتى قبل أول صفقة
+
   W.__EO_SPY = {
-    CFG, Diag, executeTrade, binDecode,
-    state: () => ({ activeAsset: activeAssetId != null ? symOf(activeAssetId) : null, assetId: activeAssetId, wsConnected, totalTicks, totalFrames, balance: curBalance(), isDemo, openTrades: _openTrades.size, assets: _assetsById.size, lastToken: !!lastToken }),
+    CFG, Diag, executeTrade, binDecode, discoverToken, ensureToken,
+    state: () => ({ activeAsset: activeAssetId != null ? symOf(activeAssetId) : null, assetId: activeAssetId, wsConnected, totalTicks, totalFrames, balance: curBalance(), isDemo, openTrades: _openTrades.size, assets: _assetsById.size, hasToken: !!lastToken, token: lastToken }),
     assets: () => _assetsById, trades: () => _openTrades, sentiment: () => _sentiment, tradersChoice: () => _tradersChoice, price: (id) => _lastPrice.get(id ?? activeAssetId),
   };
   setIntervalT(updateHud, 1000);
