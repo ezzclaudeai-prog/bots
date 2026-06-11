@@ -1,0 +1,788 @@
+// ==UserScript==
+// @name         🛰️ EXPERTOPTION_SPY — WS Interceptor + Protocol Decoder + Trade Engine + Spy Panel
+// @namespace    expertoption-spy-tool
+// @version      0.3.0
+// @description  ExpertOption spy — intercepts the binary-JSON WebSocket protocol, decodes the real action set (candles/profile/assets/trade lifecycle/crowd sentiment), tracks ticks·balance·open-trades·active-asset, executes trades via the verified buyOption format, and exposes a spy panel + raw traffic export.
+// @author       aoirusra
+// @match        *://expertoption.com/*
+// @match        *://*.expertoption.com/*
+// @match        *://expertoption.finance/*
+// @match        *://*.expertoption.finance/*
+// @run-at       document-start
+// @grant        unsafeWindow
+// ==/UserScript==
+
+(function (W) {
+  'use strict';
+  if (W.__EO_SPY_V03) return;
+  W.__EO_SPY_V03 = true;
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 1  CONFIG  (مبني على traffic حقيقي مفكوك — v0.3)
+  // ══════════════════════════════════════════════════════════════════════
+  // البروتوكول المؤكد: WebSocket بإطارات ثنائية محتواها UTF-8 JSON (لا ضغط/لا
+  // MsgPack). كل رسالة: { action, message:{...}, token, ns }. الإجراءات المتعددة
+  // تُغلَّف بـ multipleAction. الأسعار الحيّة تصل عبر "candles" (tf:0 = tick، v[0]
+  // = السعر؛ tf:5 = شمعة 5 ثوانٍ، v=[o,h,l,c]). assetId رقمي يُترجَم عبر "assets".
+  const CFG = {
+    DIAG_ENABLED      : true,
+    DIAG_MAX_PACKETS  : 2500,
+    CAPTURE_HEX_BYTES : 48,
+    CAPTURE_B64_MAX   : 8192,
+    CAPTURE_B64_HEAD  : 2048,
+
+    // ضوضاء منخفضة القيمة — تُعدّ لكنها لا تُعرض في السجل
+    LOG_MUTE_ACTIONS  : ['ping', 'candles', 'tradesStatus', 'openOptionsStat', 'expertOption', 'setConversionData'],
+
+    UI_ENABLED        : true,
+    DEFAULT_AMOUNT    : 1,
+    DEFAULT_EXP_SHIFT : 5,           // ثوانٍ — مدة انتهاء الصفقة الافتراضية
+
+    TRADE_HOST_HINTS  : ['expertoption.com', 'expertoption.finance'],
+    INFLATE_FORMATS   : ['gzip', 'deflate', 'deflate-raw'],   // احتياطي فقط
+
+    // أسماء الإجراءات الحقيقية (مؤكدة من العيّنة)
+    A: {
+      CANDLES        : 'candles',               // بث الأسعار الحيّة
+      SUBSCRIBE      : 'subscribeCandles',      // يكشف الأصل النشط
+      HISTORY        : 'assetHistoryCandles',
+      PROFILE        : 'profile',               // الرصيد
+      ASSETS         : 'assets',                // قائمة الأصول → ترجمة id↔symbol
+      BUY_RESP       : 'buyOption',             // تأكيد {trade_id}
+      OPEN_OK        : 'openTradeSuccessful',
+      CLOSE_OK       : 'closeTradeSuccessful',
+      TRADE_STATUS   : 'tradesStatus',          // حالة حيّة للصفقات المفتوحة
+      CROWD_STAT     : 'openOptionsStat',        // إحصاء جماعي
+      CROWD_FEED     : 'expertOption',           // صفقات المتداولين الآخرين (sentiment)
+      TRADERS_CHOICE : 'tradersChoice',          // مؤشر الجمهور الرسمي { asset_id, put% }
+    },
+    // خريطة النوع الرقمي في كائنات النتائج: 0=call (شراء/صعود)، 1=put (بيع/هبوط)
+    TYPE_CALL: 0, TYPE_PUT: 1,
+
+    // ─── إعدادات الإستراتيجية / محرك الإشارة ───
+    STRATEGY: {
+      SERIES_MAX     : 240,   // أقصى عدد نقاط سعر محفوظة لكل أصل
+      MIN_POINTS     : 24,    // أقل عدد نقاط قبل توليد إشارة
+      EMA_FAST       : 5,
+      EMA_SLOW       : 20,
+      RSI_PERIOD     : 14,
+      RSI_OS         : 30,    // ذروة بيع → إشارة صعود (call)
+      RSI_OB         : 70,    // ذروة شراء → إشارة هبوط (put)
+      ROC_LOOKBACK   : 6,     // نقاط الزخم
+      // أوزان مصادر الإشارة (مجموع الثقة 0-100)
+      W_TREND        : 40,    // تقاطع EMA
+      W_RSI          : 30,    // RSI
+      W_MOMENTUM     : 20,    // زخم السعر
+      W_CROWD        : 10,    // مؤشر الجمهور (تتبّع الأغلبية)
+      CROWD_FOLLOW   : true,  // true=مع الأغلبية، false=عكسي
+      MIN_CONFIDENCE : 55,    // حد الثقة لإطلاق صفقة آلية (المحرك متحفّظ؛ نادراً يتجاوز ~60 على الأصول الهادئة)
+      COOLDOWN_MS    : 8000,  // فترة تهدئة بين الصفقات الآلية
+      ONE_TRADE      : true,  // لا تفتح صفقة جديدة قبل إغلاق الحالية
+    },
+  };
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 2  UTILITIES
+  // ══════════════════════════════════════════════════════════════════════
+  const _intervals = [];
+  const setIntervalT = (fn, ms) => { const id = setInterval(fn, ms); _intervals.push(id); return id; };
+  let _nsCounter = 1000;
+  const nextNs = () => _nsCounter++;
+  function nowMs() { return Date.now(); }
+  function nowSec() { return Math.floor(Date.now() / 1000); }
+  function fmtTime(ts) { const d = new Date(ts); return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0'); }
+  function safeJSONParse(s) { try { return JSON.parse(s); } catch (_) { return null; } }
+  function tryUtf8(bytes) { try { return new TextDecoder('utf-8', { fatal: false }).decode(bytes); } catch (_) { return null; } }
+  function bytesToHex(bytes, n) { const len = Math.min(n || bytes.length, bytes.length); let s = ''; for (let i = 0; i < len; i++) s += bytes[i].toString(16).padStart(2, '0') + (i % 2 ? ' ' : ''); return s.trim(); }
+  function bufToBase64(bytes) { let bin = ''; const c = 0x8000; for (let i = 0; i < bytes.length; i += c) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + c)); return btoa(bin); }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 3  STATE
+  // ══════════════════════════════════════════════════════════════════════
+  let activeAssetId   = null;
+  let wsConnected     = false;
+  let totalFrames     = 0;
+  let totalTicks      = 0;
+  let _lastTickMs     = 0;            // وقت آخر سعر مُلتقَط — لمؤشر الحيوية/الركود
+  let balanceDemo     = null;
+  let balanceReal     = null;
+  let isDemo          = 1;
+  let tradeAmount     = CFG.DEFAULT_AMOUNT;
+  let expShift        = CFG.DEFAULT_EXP_SHIFT;
+  let tradeWS         = null;
+  let tradeWSOrig     = null;
+  let lastToken       = null;
+  let _decodeStats    = { json: 0, inflate: 0, msgpack: 0, fail: 0 };
+
+  const _lastPrice    = new Map();   // assetId → آخر سعر
+  const _assetsById   = new Map();   // assetId → { symbol, name, profit, digits, expStep, purchaseTime, active }
+  const _openTrades   = new Map();   // tradeId → trade
+  const _sentiment    = new Map();   // assetId → { call, put, ts }  (من CROWD_FEED)
+  const _tradersChoice = new Map();  // assetId → { put, call }  (مؤشر المنصة الرسمي %)
+  const _series       = new Map();   // assetId → [ price, ... ]  (سلسلة أسعار دوّارة)
+
+  // ─── حالة الإشارة / التداول الآلي ───
+  let autoTrade       = false;       // وضع التداول الآلي
+  let minConfidence   = CFG.STRATEGY.MIN_CONFIDENCE;
+  let _lastSignal     = { dir: null, conf: 0, reasons: [] };
+  let _lastAutoTradeMs = 0;
+  const _botNs        = new Set();    // ns لصفقات أرسلها البوت/المستخدم عبر الأداة
+  const _botTradeIds  = new Set();    // tradeId المؤكدة كصفقات البوت
+  const _stats        = { trades: 0, wins: 0, losses: 0, pnl: 0 };       // كل الصفقات
+  const _botStats     = { trades: 0, wins: 0, losses: 0, pnl: 0 };       // صفقات البوت فقط
+
+  function symOf(id) { const a = _assetsById.get(id); return a ? a.symbol : ('#' + id); }
+  function curBalance() { return isDemo ? balanceDemo : balanceReal; }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 4  MSGPACK (احتياطي — منسوخ من أداة PocketOption)
+  // ══════════════════════════════════════════════════════════════════════
+  function msgpackDecode(buffer) {
+    const buf = buffer instanceof ArrayBuffer ? buffer : buffer.buffer;
+    const off = buffer.byteOffset || 0, view = new DataView(buf), bytes = new Uint8Array(buf, off);
+    let pos = 0;
+    const rb = () => bytes[pos++], ru8 = () => bytes[pos++];
+    const ru16 = () => { const v = view.getUint16(pos, false); pos += 2; return v; };
+    const ru32 = () => { const v = view.getUint32(pos, false); pos += 4; return v; };
+    const ri8 = () => { const v = view.getInt8(pos); pos += 1; return v; };
+    const ri16 = () => { const v = view.getInt16(pos, false); pos += 2; return v; };
+    const ri32 = () => { const v = view.getInt32(pos, false); pos += 4; return v; };
+    const rf32 = () => { const v = view.getFloat32(pos, false); pos += 4; return v; };
+    const rf64 = () => { const v = view.getFloat64(pos, false); pos += 8; return v; };
+    const ri64 = () => { const h = view.getInt32(pos, false), l = view.getUint32(pos + 4, false); pos += 8; return h * 4294967296 + l; };
+    const ru64 = () => { const h = view.getUint32(pos, false), l = view.getUint32(pos + 4, false); pos += 8; return h * 4294967296 + l; };
+    const rStr = (n) => { const s = new TextDecoder().decode(bytes.subarray(pos, pos + n)); pos += n; return s; };
+    const rBin = (n) => { const b = bytes.subarray(pos, pos + n); pos += n; return b; };
+    function decode() {
+      const b = rb();
+      if (b <= 0x7f) return b;
+      if ((b & 0xf0) === 0x80) { const n = b & 0xf, o = {}; for (let i = 0; i < n; i++) { const k = decode(); o[k] = decode(); } return o; }
+      if ((b & 0xf0) === 0x90) { const n = b & 0xf, a = []; for (let i = 0; i < n; i++) a.push(decode()); return a; }
+      if ((b & 0xe0) === 0xa0) return rStr(b & 0x1f);
+      if ((b & 0xe0) === 0xe0) return b - 256;
+      switch (b) {
+        case 0xc0: return null; case 0xc2: return false; case 0xc3: return true;
+        case 0xc4: return rBin(ru8()); case 0xc5: return rBin(ru16()); case 0xc6: return rBin(ru32());
+        case 0xca: return rf32(); case 0xcb: return rf64();
+        case 0xcc: return ru8(); case 0xcd: return ru16(); case 0xce: return ru32(); case 0xcf: return ru64();
+        case 0xd0: return ri8(); case 0xd1: return ri16(); case 0xd2: return ri32(); case 0xd3: return ri64();
+        case 0xd9: return rStr(ru8()); case 0xda: return rStr(ru16()); case 0xdb: return rStr(ru32());
+        case 0xdc: { const n = ru16(), a = []; for (let i = 0; i < n; i++) a.push(decode()); return a; }
+        case 0xdd: { const n = ru32(), a = []; for (let i = 0; i < n; i++) a.push(decode()); return a; }
+        case 0xde: { const n = ru16(), o = {}; for (let i = 0; i < n; i++) { const k = decode(); o[k] = decode(); } return o; }
+        case 0xdf: { const n = ru32(), o = {}; for (let i = 0; i < n; i++) { const k = decode(); o[k] = decode(); } return o; }
+        default: throw new Error('msgpack 0x' + b.toString(16));
+      }
+    }
+    return decode();
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 5  DECODE ENGINE (JSON-in-binary أولاً، مع احتياطي ضغط/MsgPack)
+  // ══════════════════════════════════════════════════════════════════════
+  function parsePlain(ab) {
+    const bytes = new Uint8Array(ab);
+    if (!bytes.length) return null;
+    const c0 = bytes[0];
+    if (c0 === 0x7b || c0 === 0x5b) { const j = safeJSONParse(tryUtf8(bytes)); if (j !== null) { _decodeStats.json++; return { method: 'json', value: j }; } }
+    try { const v = msgpackDecode(ab); if (v && typeof v === 'object') { _decodeStats.msgpack++; return { method: 'msgpack', value: v }; } } catch (_) {}
+    const txt = tryUtf8(bytes);
+    if (txt) { const i = txt.search(/[{\[]/); if (i >= 0) { const j = safeJSONParse(txt.slice(i)); if (j) { _decodeStats.json++; return { method: 'json-embedded', value: j }; } } }
+    return null;
+  }
+  async function tryInflate(ab, fmt) {
+    if (typeof W.DecompressionStream !== 'function') return null;
+    try { return await new Response(new Blob([ab]).stream().pipeThrough(new W.DecompressionStream(fmt))).arrayBuffer(); } catch (_) { return null; }
+  }
+  async function binDecode(ab) {
+    const direct = parsePlain(ab);
+    if (direct) return direct;
+    const bytes = new Uint8Array(ab);
+    if (!bytes.length) return null;
+    let order = bytes[0] === 0x1f && bytes[1] === 0x8b ? ['gzip', 'deflate', 'deflate-raw']
+              : bytes[0] === 0x78 ? ['deflate', 'gzip', 'deflate-raw'] : ['deflate-raw', 'deflate', 'gzip'];
+    for (const fmt of order) { const out = await tryInflate(ab, fmt); if (out && out.byteLength) { const p = parsePlain(out); if (p) { _decodeStats.inflate++; return { method: 'inflate:' + fmt + '+' + p.method, value: p.value }; } } }
+    _decodeStats.fail++;
+    return null;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 6  PROTOCOL HANDLERS (مبنية على الصيغ الحقيقية)
+  // ══════════════════════════════════════════════════════════════════════
+  function flattenActions(msg) {
+    if (!msg || typeof msg !== 'object') return [];
+    if (msg.action === 'multipleAction' && msg.message && Array.isArray(msg.message.actions)) return msg.message.actions.filter(a => a && typeof a === 'object');
+    if (msg.action) return [msg];
+    return [];
+  }
+
+  function onCandles(m) {
+    if (!m || !Array.isArray(m.candles)) return;
+    const aid = m.assetId;
+    if (activeAssetId == null) activeAssetId = aid;
+    for (const c of m.candles) {
+      let price = null;
+      if (c.tf === 0 && Array.isArray(c.v) && c.v.length) { price = c.v[0]; activeAssetId = aid; }  // tick = الأصل المعروض حالياً
+      else if (Array.isArray(c.v) && c.v.length >= 4) price = c.v[3];                                // إغلاق الشمعة (عند أطر زمنية أكبر)
+      if (price > 0) {
+        totalTicks++; _lastPrice.set(aid, price); _lastTickMs = nowMs();
+        let ser = _series.get(aid); if (!ser) { ser = []; _series.set(aid, ser); }
+        ser.push(price); if (ser.length > CFG.STRATEGY.SERIES_MAX) ser.shift();
+      }
+    }
+  }
+
+  function onSubscribe(m) {
+    let id = null;
+    if (Array.isArray(m?.assetsIds) && m.assetsIds.length) id = m.assetsIds[m.assetsIds.length - 1];
+    else if (Array.isArray(m?.assets) && m.assets.length) id = m.assets[m.assets.length - 1]?.id;
+    if (id != null) { activeAssetId = id; addLog('🎯 الأصل النشط: ' + symOf(id) + ' (' + id + ')', 'info'); }
+  }
+
+  function onProfile(m) {
+    const p = m?.profile || m;
+    if (!p) return;
+    if (p.demo_balance != null) balanceDemo = +p.demo_balance;
+    if (p.real_balance != null) balanceReal = +p.real_balance;
+    if (p.is_demo != null) isDemo = +p.is_demo;
+    addLog('💰 رصيد — تجريبي: ' + balanceDemo + ' | حقيقي: ' + balanceReal + ' | demo=' + isDemo, 'info');
+  }
+
+  function onAssets(m) {
+    const list = m?.assets;
+    if (!Array.isArray(list)) return;
+    for (const a of list) _assetsById.set(a.id, { symbol: a.symbol, name: a.name, profit: a.profit, digits: a.digits, expStep: a.expiration_step, purchaseTime: a.purchase_time, active: a.is_active });
+    addLog('📋 أصول مُحمّلة: ' + _assetsById.size, 'info');
+  }
+
+  function onOpenOk(m) {
+    const t = m?.trade;
+    if (!t) return;
+    _openTrades.set(t.id, t);
+    addLog('🟢 فُتحت صفقة #' + t.id + ' | ' + symOf(t.asset_id) + ' | ' + (t.type === CFG.TYPE_PUT ? 'PUT▼' : 'CALL▲') + ' | $' + t.amount + ' | دخول ' + t.open_rate + ' | ربح ' + t.profit + '%', 'signal');
+  }
+
+  function onCloseOk(m) {
+    const trades = m?.trades || (m?.trade ? [m.trade] : []);
+    for (const t of trades) {
+      _openTrades.delete(t.id);
+      const res = t.result_amount || 0, win = res > 0;
+      _stats.trades++; _stats.pnl += res; win ? _stats.wins++ : _stats.losses++;
+      const isBot = _botTradeIds.has(t.id);
+      if (isBot) { _botStats.trades++; _botStats.pnl += res; win ? _botStats.wins++ : _botStats.losses++; _botTradeIds.delete(t.id); }
+      addLog((win ? '✅ ربح' : '❌ خسارة') + (isBot ? ' 🤖' : '') + ' #' + t.id + ' | ' + symOf(t.asset_id) + ' | خروج ' + t.close_rate + ' | نتيجة $' + res, win ? 'signal' : 'error');
+    }
+  }
+
+  function onCrowdFeed(m) {
+    // صفقات متداولين آخرين — نجمّع call/put لكل أصل كمؤشر sentiment
+    const opts = m?.options;
+    if (!Array.isArray(opts)) return;
+    for (const o of opts) {
+      const s = _sentiment.get(o.asset_id) || { call: 0, put: 0, ts: nowMs() };
+      if (o.type === CFG.TYPE_CALL) s.call++; else if (o.type === CFG.TYPE_PUT) s.put++;
+      s.ts = nowMs();
+      _sentiment.set(o.asset_id, s);
+    }
+  }
+
+  function onTradersChoice(m) {
+    // مؤشر المنصة الرسمي: نسبة من اختاروا put لكل أصل
+    const list = m?.assets;
+    if (!Array.isArray(list)) return;
+    for (const a of list) {
+      if (a.asset_id == null || a.put == null) continue;
+      _tradersChoice.set(a.asset_id, { put: +a.put, call: 100 - +a.put });
+    }
+  }
+
+  function dispatch(action, message, fullMsg) {
+    if (fullMsg && fullMsg.token) lastToken = fullMsg.token;
+    switch (action) {
+      case CFG.A.CANDLES:      onCandles(message); break;
+      case CFG.A.TRADERS_CHOICE: onTradersChoice(message); break;
+      case CFG.A.SUBSCRIBE:    onSubscribe(message); break;
+      case CFG.A.PROFILE:      onProfile(message); break;
+      case CFG.A.ASSETS:       onAssets(message); break;
+      case CFG.A.OPEN_OK:      onOpenOk(message); break;
+      case CFG.A.CLOSE_OK:     onCloseOk(message); break;
+      case CFG.A.CROWD_FEED:   onCrowdFeed(message); break;
+      case CFG.A.BUY_RESP:
+        if (message?.trade_id) {
+          if (fullMsg && _botNs.has(fullMsg.ns)) { _botTradeIds.add(message.trade_id); _botNs.delete(fullMsg.ns); }  // ربط صفقة البوت بـ ns
+          addLog('📨 تأكيد شراء — trade_id ' + message.trade_id, 'info');
+        }
+        break;
+      default: break;
+    }
+  }
+
+  function processDecoded(decoded) {
+    if (!decoded || typeof decoded !== 'object') return;
+    const actions = flattenActions(decoded);
+    for (const a of actions) dispatch(a.action, a.message ?? a, a);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 6.5  SIGNAL ENGINE + STRATEGY
+  // ══════════════════════════════════════════════════════════════════════
+  function ema(values, period) {
+    if (!values.length) return null;
+    const k = 2 / (period + 1);
+    let e = values[0];
+    for (let i = 1; i < values.length; i++) e = values[i] * k + e * (1 - k);
+    return e;
+  }
+  function rsi(values, period) {
+    if (values.length <= period) return null;
+    let gain = 0, loss = 0;
+    for (let i = values.length - period; i < values.length; i++) {
+      const d = values[i] - values[i - 1];
+      if (d >= 0) gain += d; else loss -= d;
+    }
+    if (loss === 0) return 100;
+    const rs = (gain / period) / (loss / period);
+    return 100 - 100 / (1 + rs);
+  }
+
+  // يولّد إشارة { dir:'call'|'put'|null, conf:0-100, reasons:[] } للأصل النشط
+  function computeSignal(assetId) {
+    const S = CFG.STRATEGY;
+    const ser = _series.get(assetId);
+    if (!ser || ser.length < S.MIN_POINTS) return { dir: null, conf: 0, reasons: ['نقاط غير كافية'] };
+
+    let callScore = 0, putScore = 0;
+    const reasons = [];
+    // كل مؤشر يصوّت باتجاه بقوة 0..1 ثم يُضرب بوزنه. أرضية القوة تضمن مساهمة
+    // معقولة عند وضوح الاتجاه حتى لو كان السعر هادئاً (وإلا لن تتجاوز الثقة 30%).
+
+    // 1) الاتجاه — تقاطع EMA
+    const eF = ema(ser.slice(-S.EMA_SLOW * 2), S.EMA_FAST);
+    const eS = ema(ser.slice(-S.EMA_SLOW * 2), S.EMA_SLOW);
+    if (eF != null && eS != null && eF !== eS) {
+      const diff = Math.abs(eF - eS) / eS;
+      const strength = 0.5 + 0.5 * Math.min(1, diff / 0.0006);
+      if (eF > eS) { callScore += strength * S.W_TREND; reasons.push('اتجاه صاعد'); }
+      else { putScore += strength * S.W_TREND; reasons.push('اتجاه هابط'); }
+    }
+
+    // 2) RSI — ذروات قوية + ميل خفيف حول 50
+    const r = rsi(ser, S.RSI_PERIOD);
+    if (r != null) {
+      if (r <= S.RSI_OS) { callScore += S.W_RSI * (0.6 + 0.4 * (S.RSI_OS - r) / S.RSI_OS); reasons.push('RSI ذروة بيع ' + r.toFixed(0)); }
+      else if (r >= S.RSI_OB) { putScore += S.W_RSI * (0.6 + 0.4 * (r - S.RSI_OB) / (100 - S.RSI_OB)); reasons.push('RSI ذروة شراء ' + r.toFixed(0)); }
+      else { const lean = (r - 50) / 50; const w = Math.abs(lean) * 0.5 * S.W_RSI; if (lean < 0) callScore += w; else putScore += w; }
+    }
+
+    // 3) الزخم — تغيّر السعر عبر آخر ROC_LOOKBACK نقاط
+    if (ser.length > S.ROC_LOOKBACK) {
+      const base = ser[ser.length - 1 - S.ROC_LOOKBACK];
+      const roc = base ? (ser[ser.length - 1] - base) / base : 0;
+      if (roc !== 0) {
+        const strength = 0.4 + 0.6 * Math.min(1, Math.abs(roc) / 0.0006);
+        if (roc > 0) { callScore += strength * S.W_MOMENTUM; reasons.push('زخم صاعد'); }
+        else { putScore += strength * S.W_MOMENTUM; reasons.push('زخم هابط'); }
+      }
+    }
+
+    // 4) مؤشر الجمهور الرسمي
+    const tc = _tradersChoice.get(assetId);
+    if (tc) {
+      const lean = (tc.call - tc.put) / 100;  // +ve = الأغلبية call
+      if (Math.abs(lean) > 0.05) {
+        const dirCall = S.CROWD_FOLLOW ? lean > 0 : lean < 0;
+        const w = Math.min(1, Math.abs(lean) * 3) * S.W_CROWD;
+        if (dirCall) { callScore += w; reasons.push('جمهور ' + (S.CROWD_FOLLOW ? 'مع' : 'عكس') + ' call'); }
+        else { putScore += w; reasons.push('جمهور ' + (S.CROWD_FOLLOW ? 'مع' : 'عكس') + ' put'); }
+      }
+    }
+
+    const dir = callScore === putScore ? null : (callScore > putScore ? 'call' : 'put');
+    const conf = Math.round(Math.min(100, Math.max(callScore, putScore)));
+    return { dir, conf, reasons, callScore: Math.round(callScore), putScore: Math.round(putScore) };
+  }
+
+  // حلقة التقييم: تحدّث الإشارة وتطلق صفقة آلية عند توفر الشروط
+  function evaluateStrategy() {
+    if (activeAssetId == null) return;
+    _lastSignal = computeSignal(activeAssetId);
+    if (!autoTrade || !_lastSignal.dir) return;
+    const S = CFG.STRATEGY;
+    if (_lastSignal.conf < minConfidence) return;
+    if (S.ONE_TRADE && _openTrades.size > 0) return;
+    if (nowMs() - _lastAutoTradeMs < S.COOLDOWN_MS) return;
+    if (!tradeWS || tradeWS.readyState !== 1 || !ensureToken()) return;
+    _lastAutoTradeMs = nowMs();
+    addLog('🤖 إشارة آلية: ' + (_lastSignal.dir === 'put' ? 'PUT▼' : 'CALL▲') + ' ثقة ' + _lastSignal.conf + '% — ' + _lastSignal.reasons.join('، '), 'signal');
+    executeTrade(_lastSignal.dir, activeAssetId, tradeAmount, expShift);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 7  DIAGNOSTIC LOGGER
+  // ══════════════════════════════════════════════════════════════════════
+  const Diag = {
+    packets: [], counts: { IN: 0, OUT: 0, byAction: {}, byMethod: {} },
+    record(dir, kind, bytes, decodeResult, sizeOverride) {
+      if (!CFG.DIAG_ENABLED) return null;
+      const isBin = bytes instanceof Uint8Array;
+      const method = decodeResult ? decodeResult.method : (kind === 'text' ? 'text' : 'undecoded');
+      const decoded = decodeResult ? decodeResult.value : null;
+      const action = decoded && typeof decoded === 'object' ? (decoded.action || null) : null;
+      this.counts[dir] = (this.counts[dir] || 0) + 1;
+      this.counts.byMethod[method] = (this.counts.byMethod[method] || 0) + 1;
+      if (action) this.counts.byAction[action] = (this.counts.byAction[action] || 0) + 1;
+      const entry = {
+        dir, t: nowMs(), kind, action, method,
+        size: isBin ? bytes.length : (sizeOverride || 0),
+        hex: isBin ? bytesToHex(bytes, CFG.CAPTURE_HEX_BYTES) : null,
+        b64: null, decoded,
+      };
+      if (isBin && kind === 'binary') entry.b64 = bytes.length <= CFG.CAPTURE_B64_MAX ? bufToBase64(bytes) : bufToBase64(bytes.subarray(0, CFG.CAPTURE_B64_HEAD)) + '…(+' + (bytes.length - CFG.CAPTURE_B64_HEAD) + 'B)';
+      this.packets.push(entry);
+      if (this.packets.length > CFG.DIAG_MAX_PACKETS) this.packets.shift();
+      if (!CFG.LOG_MUTE_ACTIONS.includes(action)) { try { renderRawLog(entry); } catch (_) {} }
+      return entry;
+    },
+    export() { return JSON.stringify({ meta: { ua: navigator.userAgent, when: new Date().toISOString(), counts: this.counts, decodeStats: _decodeStats }, packets: this.packets }, null, 2); },
+    clear() { this.packets.length = 0; this.counts = { IN: 0, OUT: 0, byAction: {}, byMethod: {} }; _decodeStats = { json: 0, inflate: 0, msgpack: 0, fail: 0 }; },
+  };
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 8  WEBSOCKET INTERCEPTION
+  // ══════════════════════════════════════════════════════════════════════
+  const NativeWS = W.WebSocket;
+  function isTradeSocket(urlStr) { return CFG.TRADE_HOST_HINTS.some(h => urlStr.includes(h)); }
+
+  async function handleBinary(ab, wsRef) {
+    totalFrames++;
+    const bytes = new Uint8Array(ab);
+    if (bytes.length <= 2) return;
+    const result = await binDecode(ab);
+    Diag.record('IN', 'binary', bytes, result);
+    if (result && result.value) processDecoded(result.value);
+  }
+  function handleText(raw, wsRef) {
+    totalFrames++;
+    const s = raw.trim();
+    if (s.length <= 2) return;
+    const j = safeJSONParse(s);
+    Diag.record('IN', 'text', null, j ? { method: 'text-json', value: j } : { method: 'text', value: null }, raw.length);
+    if (j) processDecoded(j);
+  }
+
+  function attachHooks(ws, urlStr) {
+    if (_sockets.has(ws)) return;
+    _sockets.add(ws);
+    ws._eoUrl = urlStr;
+    try { ws.binaryType = 'arraybuffer'; } catch (_) {}
+    const origSend = ws.send.bind(ws);
+
+    if (isTradeSocket(urlStr)) {
+      if (!tradeWS || tradeWS.readyState !== 1) { tradeWS = ws; tradeWSOrig = origSend; }
+      const um = urlStr.match(/[?&](?:token|auth|access_token)=([a-f0-9]{16,64})/i);  // token من عنوان المقبس
+      if (um && !lastToken) lastToken = um[1];
+      addLog('🔌 مقبس تداول: ' + urlStr.split('?')[0], 'info');
+    }
+
+    ws.send = function (data) {
+      try {
+        let bytes = null, txt = null;
+        if (typeof data === 'string') { txt = data; }
+        else if (data instanceof ArrayBuffer) { bytes = new Uint8Array(data); txt = tryUtf8(bytes); }
+        else if (ArrayBuffer.isView(data)) { bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength); txt = tryUtf8(bytes); }
+        const d = txt ? safeJSONParse(txt) : null;
+        if (d && d.token) {
+          lastToken = d.token;                               // ← التقاط token من أي إطار صادر
+          if (d.action) { tradeWS = ws; tradeWSOrig = origSend; }  // ← المقبس الذي يحمل أوامر المنصة = مقبس التداول المؤكد
+        }
+        if (bytes) Diag.record('OUT', 'binary', bytes, d ? { method: 'json', value: d } : null);
+        else if (txt && (d || txt.length > 2)) Diag.record('OUT', 'text', null, d ? { method: 'text-json', value: d } : { method: 'text', value: null }, txt.length);
+      } catch (_) {}
+      return origSend(data);
+    };
+
+    ws.addEventListener('message', (ev) => {
+      try {
+        const d = ev.data;
+        if (typeof d === 'string') handleText(d, ws);
+        else if (d instanceof ArrayBuffer) handleBinary(d, ws);
+        else if (d instanceof Blob) d.arrayBuffer().then(ab => handleBinary(ab, ws)).catch(() => {});
+        else if (ArrayBuffer.isView(d)) handleBinary(d.buffer, ws);
+      } catch (_) {}
+    });
+    ws.addEventListener('open', () => { wsConnected = true; addLog('✅ اتصال مفتوح', 'info'); });
+    ws.addEventListener('close', () => { if (ws === tradeWS) tradeWS = null; _sockets.delete(ws); });
+  }
+  const _sockets = new Set();
+
+  W.WebSocket = new Proxy(NativeWS, {
+    construct(Target, args) { const ws = new Target(...args); try { attachHooks(ws, String(args[0] || '')); } catch (_) {} return ws; },
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 9  TRADE ENGINE (صيغة buyOption المؤكدة)
+  // ══════════════════════════════════════════════════════════════════════
+  function buildOpenPayload(direction, assetId, amount, expSeconds, ns) {
+    return JSON.stringify({
+      action: 'buyOption',
+      message: {
+        type            : direction === 'put' ? 'put' : 'call',
+        amount          : amount,
+        assetid         : assetId,                 // ← lowercase (مؤكد من العيّنة)
+        strike_time     : nowSec(),
+        is_demo         : isDemo,
+        expiration_shift: expSeconds,
+        ratePosition    : 0,
+      },
+      token: lastToken,
+      ns   : ns != null ? ns : nextNs(),
+    });
+  }
+
+  // اكتشاف الـ token من مصادر متعددة (لا يعتمد على التقاط إطار صادر نادر)
+  const _TOKEN_RE = /^[a-f0-9]{16,64}$/i;
+  function discoverToken() {
+    // 1) من عنوان مقابس التداول (?token=...)
+    try { for (const ws of _sockets) { const m = String(ws._eoUrl || '').match(/[?&](?:token|auth|access_token)=([a-f0-9]{16,64})/i); if (m) return m[1]; } } catch (_) {}
+    // 2) من localStorage / sessionStorage
+    for (const store of [W.localStorage, W.sessionStorage]) {
+      try {
+        for (let i = 0; i < store.length; i++) {
+          const k = store.key(i), v = store.getItem(k);
+          if (!v) continue;
+          if (/token|auth|access/i.test(k) && _TOKEN_RE.test(v)) return v;            // قيمة مباشرة
+          if (v[0] === '{' || v[0] === '[') { try { const o = JSON.parse(v); const t = o.token || o.access_token || o.authToken || o.authtoken || o.api_token; if (typeof t === 'string' && _TOKEN_RE.test(t)) return t; } catch (_) {} }
+        }
+      } catch (_) {}
+    }
+    // 3) من الكوكيز
+    try { const m = String(document.cookie).match(/(?:token|auth|access_token)=([a-f0-9]{16,64})/i); if (m) return m[1]; } catch (_) {}
+    return null;
+  }
+  function ensureToken() { if (!lastToken) { const t = discoverToken(); if (t) { lastToken = t; addLog('🔑 token اكتُشف تلقائياً', 'info'); } } return lastToken; }
+
+  // direction: 'call' (صعود) أو 'put' (هبوط)
+  function executeTrade(direction, assetId, amount, expSeconds) {
+    const aid = assetId != null ? assetId : activeAssetId;
+    if (aid == null) { addLog('⚠️ لا أصل نشط — افتح شارت أصل أولاً', 'error'); return false; }
+    if (!tradeWS || tradeWS.readyState !== 1) { addLog('⚠️ لا مقبس تداول مفتوح (state=' + (tradeWS ? tradeWS.readyState : 'null') + ')', 'error'); return false; }
+    if (!ensureToken()) { addLog('⚠️ تعذّر إيجاد token — غيّر الأصل أو الإطار الزمني مرة واحدة لالتقاطه', 'error'); return false; }
+    const amt = amount || tradeAmount, exp = expSeconds || expShift;
+    const ns = nextNs();
+    _botNs.add(ns);   // لتتبّع نتيجة هذه الصفقة كصفقة بوت
+    const payload = buildOpenPayload(direction, aid, amt, exp, ns);
+    try {
+      tradeWS.send(new TextEncoder().encode(payload));      // عبر الهوك → يُسجَّل في الـ traffic للتحقق
+      addLog('⚡ أُرسلت: ' + (direction === 'put' ? 'PUT▼' : 'CALL▲') + ' | ' + symOf(aid) + ' | $' + amt + ' | ' + exp + 'ث | token✓ | ns=' + ns, 'signal');
+      return true;
+    } catch (e) { addLog('❌ فشل الإرسال: ' + e.message, 'error'); return false; }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 10  UI — Spy Panel
+  // ══════════════════════════════════════════════════════════════════════
+  let _ui = null, _body = null, _logEl = null, _rawEl = null, _hudEl = null, _sigEl = null, _restoreBtn = null, _autoBtn = null;
+  const LS_KEY = 'eo_spy_ui_v1';
+  let _uiState = { left: null, top: null, w: 520, h: null, collapsed: false, hidden: false, opacity: 1 };
+  function loadUIState() { try { Object.assign(_uiState, JSON.parse(W.localStorage.getItem(LS_KEY)) || {}); } catch (_) {} }
+  function saveUIState() { try { W.localStorage.setItem(LS_KEY, JSON.stringify(_uiState)); } catch (_) {} }
+  function addLog(msg, type) {
+    if (!_logEl) { try { console.log('[EO-SPY]', msg); } catch (_) {} return; }
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:2px 4px;border-bottom:1px solid #1a1a2e;font:11px monospace;color:' + (type === 'error' ? '#ff5577' : type === 'signal' ? '#33ddaa' : '#aab');
+    row.textContent = fmtTime(nowMs()) + '  ' + msg;
+    _logEl.insertBefore(row, _logEl.firstChild);
+    while (_logEl.childNodes.length > 200) _logEl.removeChild(_logEl.lastChild);
+  }
+  function renderRawLog(entry) {
+    if (!_rawEl) return;
+    const col = entry.dir === 'OUT' ? '#ffaa44' : (entry.action ? '#66ccff' : '#777');
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:1px 4px;border-bottom:1px solid #16161e;font:10px monospace;color:' + col + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    const body = entry.decoded ? JSON.stringify(entry.decoded.message ?? entry.decoded).slice(0, 260) : (entry.hex || '');
+    row.textContent = entry.dir + ' ' + fmtTime(entry.t) + ' ' + entry.size + 'B [' + (entry.action || entry.method) + '] ' + body;
+    row.title = (entry.decoded ? JSON.stringify(entry.decoded, null, 1).slice(0, 3000) : '') + (entry.hex ? '\n\nHEX: ' + entry.hex : '');
+    _rawEl.insertBefore(row, _rawEl.firstChild);
+    while (_rawEl.childNodes.length > 300) _rawEl.removeChild(_rawEl.lastChild);
+  }
+  function updateHud() {
+    if (!_hudEl) return;
+    const tc = activeAssetId != null ? _tradersChoice.get(activeAssetId) : null;
+    const s = activeAssetId != null ? _sentiment.get(activeAssetId) : null;
+    const sent = tc ? ('▲' + tc.call + '% / ▼' + tc.put + '%') : (s ? ('▲' + s.call + ' / ▼' + s.put) : '—');
+    const price = activeAssetId != null ? _lastPrice.get(activeAssetId) : null;
+    const asset = activeAssetId != null ? _assetsById.get(activeAssetId) : null;
+    const ageMs = _lastTickMs ? (nowMs() - _lastTickMs) : null;
+    const ageSec = ageMs != null ? Math.round(ageMs / 1000) : null;
+    const live = ageMs == null ? '⚪ بانتظار البث' : (ageMs < 3000 ? '🟢 حيّ' : (ageMs < 10000 ? '🟡 بطيء ' + ageSec + 'ث' : '🔴 ركود ' + ageSec + 'ث'));
+    _hudEl.innerHTML =
+      '<b style="color:#33ddaa">EO-SPY v0.3</b> ' + (wsConnected ? '🟢' : '🔴') +
+      ' | <b>' + (activeAssetId != null ? symOf(activeAssetId) : '—') + '</b>' +
+      ' @ <b>' + (price != null ? price.toFixed(asset?.digits || 4) : '—') + '</b>' +
+      ' | ربح ' + (asset?.profit ?? '—') + '%' +
+      ' | جمهور ' + sent +
+      '<br><span style="color:#9ab;font-size:10px">' + live +
+      ' | رصيد: <b>' + (curBalance() ?? '—') + '</b> (' + (isDemo ? 'تجريبي' : 'حقيقي') + ')' +
+      ' | token ' + (lastToken ? '🔑' : '❌') +
+      ' | مقبس ' + (tradeWS && tradeWS.readyState === 1 ? '✓' : '✗') +
+      ' | ticks ' + totalTicks + ' | مفتوحة ' + _openTrades.size + '</span>';
+    renderSignal();
+  }
+  function renderSignal() {
+    if (!_sigEl) return;
+    const sg = _lastSignal || { dir: null, conf: 0, reasons: [] };
+    const arrow = sg.dir === 'call' ? '<span style="color:#33dd88">▲ CALL</span>' : sg.dir === 'put' ? '<span style="color:#ff5577">▼ PUT</span>' : '<span style="color:#778">— محايد</span>';
+    const bar = sg.conf >= minConfidence ? '#33dd88' : '#667';
+    const wr = (st) => st.trades ? Math.round(st.wins / st.trades * 100) + '%' : '—';
+    _sigEl.innerHTML =
+      '🧭 إشارة: ' + arrow + ' <b style="color:' + bar + '">' + sg.conf + '%</b>' +
+      ' <span style="color:#778;font-size:10px">(حد ' + minConfidence + '%)</span>' +
+      (sg.reasons && sg.reasons.length ? ' <span style="color:#9ab;font-size:10px">— ' + sg.reasons.join('، ') + '</span>' : '') +
+      '<br><span style="color:#9ab;font-size:10px">📊 بوت: ' + _botStats.trades + ' صفقة | فوز ' + wr(_botStats) + ' (' + _botStats.wins + 'W/' + _botStats.losses + 'L) | ربح/خسارة $' + _botStats.pnl.toFixed(2) +
+      '  •  الكل: ' + _stats.trades + ' | فوز ' + wr(_stats) + '</span>';
+  }
+  function mkBtn(txt, fn, title) { const b = document.createElement('button'); b.textContent = txt; if (title) b.title = title; b.style.cssText = 'flex:0 0 auto;padding:3px 8px;font:11px sans-serif;background:#1a1a33;color:#cce;border:1px solid #33335a;border-radius:4px;cursor:pointer'; b.onclick = fn; return b; }
+  function mkWinBtn(txt, fn, title) { const b = document.createElement('button'); b.textContent = txt; b.title = title || ''; b.style.cssText = 'width:22px;height:22px;padding:0;font:12px sans-serif;background:#23234a;color:#cce;border:1px solid #3a3a66;border-radius:4px;cursor:pointer;line-height:1'; b.onclick = (e) => { e.stopPropagation(); fn(); }; return b; }
+
+  function applyUIState() {
+    if (!_ui) return;
+    const s = _uiState;
+    if (s.left != null) { _ui.style.left = s.left + 'px'; _ui.style.top = s.top + 'px'; _ui.style.right = 'auto'; }
+    if (s.w) _ui.style.width = s.w + 'px';
+    _ui.style.height = (s.collapsed || !s.h) ? 'auto' : s.h + 'px';
+    _ui.style.opacity = s.opacity;
+    _body.style.display = s.collapsed ? 'none' : 'flex';
+    _ui.style.display = s.hidden ? 'none' : 'flex';
+    if (_restoreBtn) _restoreBtn.style.display = s.hidden ? 'block' : 'none';
+  }
+  function toggleCollapse() { _uiState.collapsed = !_uiState.collapsed; applyUIState(); saveUIState(); }
+  function cycleOpacity() { const seq = [1, 0.7, 0.4]; _uiState.opacity = seq[(seq.indexOf(_uiState.opacity) + 1) % seq.length]; applyUIState(); saveUIState(); }
+  function hidePanel() { _uiState.hidden = true; applyUIState(); saveUIState(); }
+  function showPanel() { _uiState.hidden = false; applyUIState(); saveUIState(); }
+
+  function makeDraggable(handle) {
+    let sx, sy, ox, oy, drag = false;
+    handle.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button')) return;
+      drag = true; sx = e.clientX; sy = e.clientY;
+      const r = _ui.getBoundingClientRect(); ox = r.left; oy = r.top;
+      _ui.style.right = 'auto'; _ui.style.left = ox + 'px'; _ui.style.top = oy + 'px';
+      e.preventDefault();
+    });
+    W.addEventListener('mousemove', (e) => {
+      if (!drag) return;
+      let nx = ox + (e.clientX - sx), ny = oy + (e.clientY - sy);
+      nx = Math.max(0, Math.min(nx, W.innerWidth - 60));
+      ny = Math.max(0, Math.min(ny, W.innerHeight - 28));
+      _ui.style.left = nx + 'px'; _ui.style.top = ny + 'px';
+    });
+    W.addEventListener('mouseup', () => {
+      if (!drag) return; drag = false;
+      const r = _ui.getBoundingClientRect(); _uiState.left = r.left; _uiState.top = r.top; saveUIState();
+    });
+  }
+
+  function buildUI() {
+    if (!CFG.UI_ENABLED || _ui) return;
+    loadUIState();
+
+    _ui = document.createElement('div');
+    _ui.style.cssText = 'position:fixed;top:8px;right:8px;width:520px;min-width:280px;min-height:0;max-height:92vh;z-index:2147483646;display:flex;flex-direction:column;overflow:hidden;resize:both;background:#0d0d18;border:1px solid #2a2a44;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,.6);font-family:system-ui,sans-serif;color:#ccd';
+
+    // ─── شريط العنوان (مقبض السحب + أزرار النافذة) ───
+    const bar = document.createElement('div');
+    bar.style.cssText = 'flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:4px 8px;background:#1a1a3a;cursor:move;border-bottom:1px solid #2a2a44;user-select:none';
+    const title = document.createElement('span'); title.innerHTML = '🛰️ <b>EO-SPY</b> <span style="color:#667;font-size:10px">v0.3</span>'; title.style.cssText = 'font:12px sans-serif;color:#cce';
+    const ctrls = document.createElement('div'); ctrls.style.cssText = 'display:flex;gap:4px';
+    ctrls.append(
+      mkWinBtn('🌓', cycleOpacity, 'شفافية'),
+      mkWinBtn('▁', toggleCollapse, 'تصغير/تكبير'),
+      mkWinBtn('✕', hidePanel, 'إخفاء (Alt+S لإظهارها)'),
+    );
+    bar.append(title, ctrls);
+
+    // ─── الجسم (يُخفى عند التصغير) ───
+    _body = document.createElement('div');
+    _body.style.cssText = 'flex:1 1 auto;display:flex;flex-direction:column;overflow:hidden;min-height:0';
+    _hudEl = document.createElement('div'); _hudEl.style.cssText = 'flex:0 0 auto;padding:6px 8px;font:11px monospace;border-bottom:1px solid #2a2a44;background:#11112a';
+    const tabs = document.createElement('div'); tabs.style.cssText = 'flex:0 0 auto;display:flex;gap:4px;padding:4px 6px;border-bottom:1px solid #2a2a44;flex-wrap:wrap';
+    _logEl = document.createElement('div'); _logEl.style.cssText = 'flex:1 1 35%;min-height:34px;overflow:auto;background:#0a0a14';
+    _rawEl = document.createElement('div'); _rawEl.style.cssText = 'flex:1 1 45%;min-height:34px;overflow:auto;background:#08080f;border-top:1px solid #2a2a44';
+
+    tabs.append(
+      mkBtn('▲ CALL', () => executeTrade('call'), 'فتح صفقة صعود'),
+      mkBtn('▼ PUT', () => executeTrade('put'), 'فتح صفقة هبوط'),
+      mkBtn('📈 شموع', () => { const i = CFG.LOG_MUTE_ACTIONS.indexOf('candles'); if (i >= 0) { CFG.LOG_MUTE_ACTIONS.splice(i, 1); addLog('📈 إظهار بث الشموع في السجل — لتأكيد الحيوية', 'info'); } else { CFG.LOG_MUTE_ACTIONS.push('candles'); addLog('📉 كتم بث الشموع', 'info'); } }, 'إظهار/كتم بث الأسعار في السجل'),
+      mkBtn('📋 ملخص', () => { navigator.clipboard?.writeText(JSON.stringify({ byAction: Diag.counts.byAction, byMethod: Diag.counts.byMethod, decodeStats: _decodeStats }, null, 2)); addLog('📋 نُسخ الملخص', 'info'); }),
+      mkBtn('⬇️ تصدير', () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([Diag.export()], { type: 'application/json' })); a.download = 'eo_traffic_' + Date.now() + '.json'; a.click(); addLog('⬇️ صُدّر ' + Diag.packets.length + ' حزمة', 'info'); }),
+      mkBtn('🗑️ مسح', () => { Diag.clear(); if (_rawEl) _rawEl.innerHTML = ''; addLog('🗑️ مُسح', 'info'); }),
+    );
+
+    // ─── صف التحكم: مبلغ + مدة + ثقة + تداول آلي ───
+    const ctrlRow = document.createElement('div'); ctrlRow.style.cssText = 'flex:0 0 auto;display:flex;gap:6px;align-items:center;padding:4px 6px;border-bottom:1px solid #2a2a44;background:#0f0f22;flex-wrap:wrap;font:11px sans-serif;color:#9ab';
+    const mkNum = (label, val, fn, w) => { const wrap = document.createElement('label'); wrap.style.cssText = 'display:flex;align-items:center;gap:3px'; const inp = document.createElement('input'); inp.type = 'number'; inp.value = val; inp.min = '1'; inp.style.cssText = 'width:' + (w || 46) + 'px;background:#1a1a33;color:#cce;border:1px solid #33335a;border-radius:4px;padding:2px 4px;font:11px monospace'; inp.onchange = () => fn(parseFloat(inp.value)); wrap.append(document.createTextNode(label), inp); return wrap; };
+    ctrlRow.append(
+      mkNum('💵', tradeAmount, v => { if (v > 0) { tradeAmount = v; addLog('💵 المبلغ: $' + v, 'info'); } }),
+      mkNum('⏱️', expShift, v => { if (v > 0) { expShift = v; addLog('⏱️ المدة: ' + v + 'ث', 'info'); } }),
+    );
+    const confWrap = document.createElement('label'); confWrap.style.cssText = 'display:flex;align-items:center;gap:4px;flex:1 1 120px';
+    const confSlider = document.createElement('input'); confSlider.type = 'range'; confSlider.min = '40'; confSlider.max = '90'; confSlider.value = String(minConfidence); confSlider.style.cssText = 'flex:1';
+    const confVal = document.createElement('span'); confVal.textContent = minConfidence + '%'; confVal.style.cssText = 'font:11px monospace;color:#cce;min-width:34px';
+    confSlider.oninput = () => { minConfidence = parseInt(confSlider.value, 10); confVal.textContent = minConfidence + '%'; };
+    confWrap.append(document.createTextNode('🎯'), confSlider, confVal);
+    _autoBtn = mkBtn('🤖 آلي: متوقف', () => {
+      autoTrade = !autoTrade;
+      _autoBtn.textContent = '🤖 آلي: ' + (autoTrade ? 'يعمل ✅' : 'متوقف');
+      _autoBtn.style.background = autoTrade ? '#1f4d2e' : '#1a1a33';
+      addLog(autoTrade ? '🤖 التداول الآلي يعمل — حد الثقة ' + minConfidence + '%' : '🤖 التداول الآلي متوقف', autoTrade ? 'signal' : 'info');
+    }, 'تشغيل/إيقاف التداول الآلي');
+    ctrlRow.append(confWrap, _autoBtn);
+
+    // ─── سطر الإشارة الحيّة ───
+    _sigEl = document.createElement('div'); _sigEl.style.cssText = 'flex:0 0 auto;padding:5px 8px;font:11px monospace;border-bottom:1px solid #2a2a44;background:#0c0c1c';
+
+    const rawHdr = document.createElement('div'); rawHdr.style.cssText = 'flex:0 0 auto;padding:3px 8px;font:10px monospace;color:#778;background:#11111e;border-top:1px solid #2a2a44';
+    rawHdr.textContent = '── RAW WS LOG (candles/ping مكتومة — مرّر للتفاصيل) ──';
+
+    _body.append(_hudEl, _sigEl, ctrlRow, tabs, _logEl, rawHdr, _rawEl);
+    _ui.append(bar, _body);
+    document.documentElement.appendChild(_ui);
+
+    // ─── زر عائم لإعادة الإظهار بعد الإخفاء ───
+    _restoreBtn = document.createElement('div');
+    _restoreBtn.textContent = '🛰️'; _restoreBtn.title = 'إظهار EO-SPY';
+    _restoreBtn.style.cssText = 'position:fixed;bottom:14px;right:14px;z-index:2147483647;width:36px;height:36px;border-radius:50%;background:#1a1a3a;border:1px solid #3a3a66;color:#cce;font-size:17px;line-height:36px;text-align:center;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.6);display:none';
+    _restoreBtn.onclick = showPanel;
+    document.documentElement.appendChild(_restoreBtn);
+
+    // سحب + حفظ الحجم عند تغييره + اختصار Alt+S
+    makeDraggable(bar);
+    if (typeof W.ResizeObserver === 'function') {
+      new W.ResizeObserver(() => { if (!_uiState.collapsed && _ui.style.display !== 'none') { _uiState.w = _ui.offsetWidth; _uiState.h = _ui.offsetHeight; saveUIState(); } }).observe(_ui);
+    }
+    W.addEventListener('keydown', (e) => { if (e.altKey && (e.key === 's' || e.key === 'S')) { e.preventDefault(); _uiState.hidden ? showPanel() : hidePanel(); } });
+
+    applyUIState();
+    updateHud();
+    addLog('🛰️ EO-SPY v0.3 جاهز — اسحب الشريط العلوي لنقلها، ✕ لإخفائها (Alt+S)', 'signal');
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // § 11  BOOT
+  // ══════════════════════════════════════════════════════════════════════
+  function boot() { if (document.documentElement) buildUI(); else W.addEventListener('DOMContentLoaded', buildUI, { once: true }); }
+  if (document.readyState === 'loading') W.addEventListener('DOMContentLoaded', boot, { once: true }); else boot();
+
+  setIntervalT(() => { ensureToken(); }, 3000);   // محاولة اكتشاف token دورياً حتى قبل أول صفقة
+  setIntervalT(evaluateStrategy, 1000);            // تقييم الإشارة/التداول الآلي كل ثانية
+
+  W.__EO_SPY = {
+    CFG, Diag, executeTrade, binDecode, discoverToken, ensureToken, computeSignal,
+    state: () => ({ activeAsset: activeAssetId != null ? symOf(activeAssetId) : null, assetId: activeAssetId, wsConnected, totalTicks, totalFrames, balance: curBalance(), isDemo, openTrades: _openTrades.size, assets: _assetsById.size, hasToken: !!lastToken, token: lastToken }),
+    signal: () => _lastSignal, stats: () => ({ all: _stats, bot: _botStats }),
+    setAuto: (on) => { autoTrade = !!on; }, setAmount: (v) => { tradeAmount = v; }, setExp: (v) => { expShift = v; }, setMinConf: (v) => { minConfidence = v; },
+    assets: () => _assetsById, trades: () => _openTrades, sentiment: () => _sentiment, tradersChoice: () => _tradersChoice, price: (id) => _lastPrice.get(id ?? activeAssetId),
+  };
+  setIntervalT(updateHud, 1000);
+
+})(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
