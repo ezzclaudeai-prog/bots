@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ⏱️ PO TIME-CLICK BOT — M1 Timed Strategy + Predictive Momentum + DOM Click Execution
 // @namespace    pocket-option-time-click-bot
-// @version      1.4.0
+// @version      1.5.0
 // @description  بوت تداول ذاتي لمنصة بوكيت أوبشن: استخراج تلقائي للأزرار وعمر الصفقة وعمر شمعة M1، استراتيجية زمنية (ث36/26/11)، فلتر زخم تنبّئي من مقابس ORACLE/MAIN، نظام تجميد زمني لحماية رأس المال، والتنفيذ حصراً عبر محاكاة النقر الفيزيائي على أزرار الشراء/البيع. يعمل بالكامل بدون كونسول (Kiwi Browser + Violentmonkey).
 // @author       aoirusra
 // @match        *://pocketoption.com/*
@@ -22,33 +22,35 @@
   // ══════════════════════════════════════════════════════════════════════
   const CFG = {
     CANDLE_SEC          : 60,        // شمعة M1
-    FIRE_SECONDS_TREND  : [36, 26],  // الثواني التي تُفتح فيها صفقة مع اتجاه الشمعة
-    FIRE_SECONDS_COUNTER: [11],      // الثانية التي تُفتح فيها صفقة معاكسة
-    FIRE_TOLERANCE_MS   : 350,       // نافذة السماح حول الثانية المستهدفة
+    FIRE_SECONDS_TREND  : [46, 36, 26],  // ثوانٍ الدخول مع اتجاه الشمعة (أُضيفت 46 لزيادة الفرص)
+    FIRE_SECONDS_COUNTER: [11, 51],      // ثوانٍ الدخول المعاكس (أُضيفت 51)
+    FIRE_TOLERANCE_MS   : 600,       // نافذة السماح حول الثانية المستهدفة (موسّعة للنت البطيء)
 
-    // ─── فلتر الزخم التنبّئي ─────────────────────────────────────────
-    MOM_ENABLED         : true,
+    // ─── فلتر الزخم التنبّئي (شروط مخفّفة لتسريع الدخول) ──────────────
+    MOM_ENABLED         : true,      // false = تجاهل الزخم والدخول بالوقت فقط
     MOM_WINDOW_MS       : 10000,     // نافذة تحليل الزخم (آخر 10 ثوانٍ)
     MOM_RECENT_MS       : 2500,      // نافذة الزخم اللحظي (آخر ~2.5ث)
-    MOM_MIN_TICKS       : 4,         // أقل عدد تيكات مطلوب في النافذة وإلا حجب
-    MOM_NET_NOISE_MULT  : 1.2,       // صافي الحركة في الاتجاه يجب أن يتجاوز K×ضجيج التيك
-    MOM_RECENT_NOISE_MULT: 0.8,      // الزخم اللحظي يجب أن يتجاوز K×ضجيج التيك
-    MOM_REQUIRE_COVER   : true,      // يشترط أن يغطّي الزخم المتوقّع زمناً > عمر الصفقة
+    MOM_MIN_TICKS       : 2,         // أقل عدد تيكات (مخفّض لئلا يُحجب في السوق الهادئ)
+    MOM_NET_NOISE_MULT  : 0.4,       // عتبة صافي الحركة (مخفّضة لتسهيل الدخول)
+    MOM_RECENT_NOISE_MULT: 0.3,      // عتبة الزخم اللحظي (مخفّضة)
+    MOM_REQUIRE_COVER   : false,     // ✅ مهم: كان أكبر سبب لحجب الصفقات — أُلغي
 
-    // ─── نظام التجميد الزمني (حماية رأس المال) ────────────────────────
-    RISK_ENABLED        : true,
-    REVERSAL_NOISE_MULT : 2.0,       // انعكاس عنيف = حركة معاكسة تتجاوز K×ضجيج التيك
-    COOLDOWN_MS         : 90000,     // مدة التجميد بعد انعكاس عنيف (90ث)
-    STREAK_COOLDOWN     : 2,         // عدد الانعكاسات المتتالية قبل تجميد مُطوّل
-    STREAK_COOLDOWN_MS  : 240000,    // تجميد مُطوّل (4 دقائق) بعد سلسلة انعكاسات
+    // ─── نظام التجميد الزمني (عقوبات أخف) ────────────────────────────
+    RISK_ENABLED        : true,      // false = إلغاء التجميد بعد الخسارة
+    REVERSAL_NOISE_MULT : 3.5,       // أعلى = لا يعتبر الحركة البسيطة انعكاساً عنيفاً
+    COOLDOWN_MS         : 20000,     // تجميد بعد الانعكاس (20ث بدل 90)
+    STREAK_COOLDOWN     : 3,         // انعكاسات مسموحة قبل التجميد المطوّل
+    STREAK_COOLDOWN_MS  : 60000,     // تجميد مطوّل (دقيقة بدل 4)
 
     // ─── التنفيذ ────────────────────────────────────────────────────
-    MIN_INTER_TRADE_MS  : 1500,      // أقل فاصل بين أي نقرتين تنفيذيتين
+    MIN_INTER_TRADE_MS  : 1000,      // أقل فاصل بين نقرتين (ثانية)
     DEFAULT_TRADE_SEC   : 5,         // عمر صفقة افتراضي إذا تعذّر استخراجه
 
     RESCAN_DOM_MS       : 4000,      // إعادة مسح عناصر الواجهة دورياً
-    LOG_MAX             : 500,       // ⬆ كما في v17: سجل عميق 500 سطر
-    LOG_TICK_EVERY      : 5,         // سجّل كل خامس تيك (كما في v17)
+    LOG_MAX             : 500,       // عمق السجل
+    LOG_TICK_EVERY      : 5,         // سجّل كل خامس تيك
+    LOG_RENDER_MS       : 250,       // ✅ أداء: تحديث عرض السجل كل 250ms (لا عند كل سطر)
+    COUNTDOWN_POLL_MS   : 1000,      // ✅ أداء: مسح عداد DOM الاحتياطي كل ثانية (chafor هو الأساس)
     STREAM_GAP_MS       : 5000,      // إنذار انقطاع التدفق
     AUTOSTART           : false,     // لا يتداول حتى يضغط المستخدم تشغيل
   };
@@ -822,6 +824,9 @@
   //   الذي «يتناقص ثانية كل ثانية» فعلاً. لحظة قفزة قيمته = مرساة طور دقيقة.
   const _cdCands = new Map();   // path → { el, lastVal, lastT, decScore }
   function countdownPoll() {
+    // ✅ أداء: chafor (WSS) هو المصدر الأساسي للعداد. لا تمسح الـ DOM الثقيل
+    //   إلا إذا انقطع chafor (لم يصل منذ >5ث) — يوفّر كنس آلاف العناصر كل دورة.
+    if (_chafor.lastMs && (now() - _chafor.lastMs) < 5000) return;
     try {
       const re = /^([0-5]?\d):([0-5]\d)$/;
       const els = document.querySelectorAll('span, div, p, time, b, strong');
@@ -1021,19 +1026,28 @@
     const e = { msg, kind, t: new Date().toLocaleTimeString('ar-EG', { hour12: false }) };
     logBuf.unshift(e);
     if (logBuf.length > CFG.LOG_MAX) logBuf.pop();
-    if (!_logPaused) renderLog();
+    _logDirty = true;   // ✅ أداء: لا نعيد البناء هنا — مؤقّت دوري يفعل (يمنع تجمّد الصفحة)
     try { if (W.navigator && W.navigator.vibrate && (kind === 'trade')) W.navigator.vibrate(40); } catch (_) {}
   }
+  let _logDirty = false;
   const LOG_COLORS = { trade:'#46d98e', signal:'#3fe0ff', error:'#ff5b6e', warn:'#ffd24a', risk:'#ff9f1c', info:'#9fb2c0', tick:'#7aa2c4', wss:'#9b8cff' };
-  function renderLog() {
+  // عرض متدفّق محدود المعدّل: يُستدعى من مؤقّت كل LOG_RENDER_MS، ويبني فقط عند وجود جديد
+  function renderLog(force) {
     if (!logInnerEl) return;
-    const items = logBuf.filter(e => _logFilter === 'all' ? true : e.kind === _logFilter);
-    logInnerEl.innerHTML = items.slice(0, 120).map(e =>
-      '<div style="padding:3px 8px;border-bottom:1px solid #16222e;font-size:10px;line-height:1.4;color:' +
-      (LOG_COLORS[e.kind] || '#cfd2d6') + '"><span style="color:#56707f">' + e.t + '</span> ' +
-      e.msg.replace(/</g, '&lt;') + '</div>'
-    ).join('');
+    if (!force && (_logPaused || !_logDirty)) return;
+    if (!isLogOpen()) { _logDirty = false; return; }   // لا تبنِ شيئاً واللوحة مغلقة
+    _logDirty = false;
+    const items = _logFilter === 'all' ? logBuf : logBuf.filter(e => e.kind === _logFilter);
+    let html = '';
+    for (let i = 0; i < items.length && i < 140; i++) {
+      const e = items[i];
+      html += '<div style="padding:3px 8px;border-bottom:1px solid #16222e;font-size:10px;line-height:1.4;color:' +
+        (LOG_COLORS[e.kind] || '#cfd2d6') + '"><span style="color:#56707f">' + e.t + '</span> ' +
+        e.msg.replace(/</g, '&lt;') + '</div>';
+    }
+    logInnerEl.innerHTML = html;
   }
+  function isLogOpen() { const lf = document.getElementById('cbLogFloat'); return lf && lf.classList.contains('open'); }
 
   // ── تصدير HTML كامل + تقرير تشخيصي (ملف txt قابل للتنزيل — بدون كونسول) ──
   function _snip(el, n) {
@@ -1416,15 +1430,15 @@
     const panel = $('cbPanel'), logFloat = $('cbLogFloat');
     $('cbIcon').addEventListener('click', () => panel.classList.toggle('open'));
     $('cbClose').addEventListener('click', () => panel.classList.remove('open'));
-    $('cbLogBtn').addEventListener('click', () => { logFloat.classList.toggle('open'); renderLog(); });
+    $('cbLogBtn').addEventListener('click', () => { logFloat.classList.toggle('open'); renderLog(true); });
     $('cbLogCloseX').addEventListener('click', () => logFloat.classList.remove('open'));
-    $('cbLogPause').addEventListener('click', (e) => { _logPaused = !_logPaused; e.target.textContent = _logPaused ? '▶ تشغيل' : '⏸ وقفة'; if (!_logPaused) renderLog(); });
-    $('cbLogClear').addEventListener('click', () => { logBuf.length = 0; renderLog(); });
+    $('cbLogPause').addEventListener('click', (e) => { _logPaused = !_logPaused; e.target.textContent = _logPaused ? '▶ تشغيل' : '⏸ وقفة'; if (!_logPaused) renderLog(true); });
+    $('cbLogClear').addEventListener('click', () => { logBuf.length = 0; renderLog(true); });
     $('cbLogFilters').addEventListener('click', (e) => {
       const b = e.target.closest('.cb-lf'); if (!b) return;
       _logFilter = b.dataset.f;
       $('cbLogFilters').querySelectorAll('.cb-lf').forEach(x => x.classList.toggle('active', x === b));
-      renderLog();
+      renderLog(true);
     });
 
     $('cbAutoToggle').addEventListener('change', (e) => setAuto(e.target.checked));
@@ -1473,7 +1487,8 @@
     buildHUD();
     scanDOM();
     setInterval(scanDOM, CFG.RESCAN_DOM_MS);
-    setInterval(countdownPoll, 400);    // متتبّع عداد DOM (احتياطي) + مرساة الطور
+    setInterval(countdownPoll, CFG.COUNTDOWN_POLL_MS);  // عداد DOM احتياطي فقط عند انقطاع chafor
+    setInterval(() => renderLog(false), CFG.LOG_RENDER_MS);  // عرض السجل محدود المعدّل (أداء)
     setInterval(strategyLoop, 60);      // حلقة الاستراتيجية عالية الدقة (~60ms)
     setInterval(updateHUD, 250);
     setInterval(streamWatchdog, 1000);  // مراقب انقطاع التدفق
