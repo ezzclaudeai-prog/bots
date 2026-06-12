@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ⏱️ PO TIME-CLICK BOT — M1 Timed Strategy + Predictive Momentum + DOM Click Execution
 // @namespace    pocket-option-time-click-bot
-// @version      1.3.0
+// @version      1.4.0
 // @description  بوت تداول ذاتي لمنصة بوكيت أوبشن: استخراج تلقائي للأزرار وعمر الصفقة وعمر شمعة M1، استراتيجية زمنية (ث36/26/11)، فلتر زخم تنبّئي من مقابس ORACLE/MAIN، نظام تجميد زمني لحماية رأس المال، والتنفيذ حصراً عبر محاكاة النقر الفيزيائي على أزرار الشراء/البيع. يعمل بالكامل بدون كونسول (Kiwi Browser + Violentmonkey).
 // @author       aoirusra
 // @match        *://pocketoption.com/*
@@ -96,6 +96,13 @@
     labTs: 0,                       // آخر توقيت خادم دقيق (ms)
   };
   const _evSeen = {};               // throttle لتسجيل أنواع أحداث WSS
+
+  // ── حالة المنصة (رصيد / عائد / صفقات) — كما في v17 ──
+  let accountBalance = null, isDemo = null;
+  const assetPayouts = new Map();   // asset → نسبة العائد (0.92)
+  const openOrders   = new Map();   // orderId → {dir, openPrice, amount, closeMs, label}
+  let _lastClick     = null;        // {dir, t, label} لربط الأمر المؤكد بآخر نقرة
+  const winStats     = { wins: 0, losses: 0, profit: 0, lossStreak: 0 };
 
   // ══════════════════════════════════════════════════════════════════════
   // § 3  UTIL
@@ -241,13 +248,115 @@
           ingestSettings(s || {}, chart);
         }
       }
+      // ── دورة حياة الصفقة + حالة الحساب (كما في v17) ──
+      if (evName === 'updateAssets' && Array.isArray(payload)) processUpdateAssets(payload);
+      if (evName === 'successopenOrder' && payload && payload.id) onOpenOrderSuccess(payload);
+      if (evName === 'successcloseOrder' && payload && payload.deals) processCloseOrder(payload);
+      if (evName === 'failopenOrder' && payload && payload.error) onFailOrder(payload);
+      if (evName === 'successupdateBalance' && payload && payload.balance !== undefined) onBalanceUpdate(payload);
+      if (evName === 'successauth') log('✅ مقبس مصادَق (successauth)', 'signal');
     } catch (_) {}
   }
 
-  function onMessage(role, raw) {
+  // قراءة نسب العائد لكل أصل (updateAssets)
+  function processUpdateAssets(decoded) {
+    let parsed = 0;
+    for (const item of decoded) {
+      if (!Array.isArray(item) || item.length < 3) continue;
+      let symbol = null, payout = null, isOpen = null;
+      for (const f of item) {
+        if (symbol === null && typeof f === 'string' && f.length >= 2 && f.length <= 32 && /^[A-Z0-9_/-]+$/i.test(f)) symbol = f;
+        else if (payout === null && typeof f === 'number' && f >= 50 && f <= 100) payout = f;
+        else if (isOpen === null && typeof f === 'boolean') isOpen = f;
+      }
+      if (symbol && payout !== null) { assetPayouts.set(normalizeAsset(symbol), payout / 100); parsed++; }
+    }
+    if (parsed > 0 && activeAsset && assetPayouts.has(activeAsset)) {
+      log('💰 [PAYOUT] عائد ' + activeAsset + ' = ' + Math.round(assetPayouts.get(activeAsset) * 100) + '% (' + parsed + ' أصل)', 'info');
+    }
+  }
+
+  // تأكيد فتح أمر من المنصة — يربط بآخر نقرة ويعرض وقت الإغلاق الفعلي
+  function onOpenOrderSuccess(data) {
+    const openTs = Number(data.openTimestamp) || 0, closeTs = Number(data.closeTimestamp) || 0;
+    const durSec = (openTs && closeTs) ? (closeTs - openTs) : tradeDurSec();
+    const closeMs = closeTs ? closeTs * 1000 - _serverOffsetMs : (now() + durSec * 1000);
+    const dirGuess = _lastClick ? _lastClick.dir : 0;
+    openOrders.set(data.id, { dir: dirGuess, openPrice: data.openPrice || 0, amount: data.amount || 0, closeMs, label: _lastClick ? _lastClick.label : '' });
+    const closeHMS = new Date(closeMs).toLocaleTimeString('en-GB', { hour12: false });
+    log('📨 أُكِّد الأمر #' + data.id + ' | ' + (dirGuess>0?'CALL':dirGuess<0?'PUT':'?') +
+        ' | فتح ' + (data.openPrice ? data.openPrice.toFixed(5) : '?') +
+        ' | مبلغ $' + (data.amount || '?') +
+        ' | ⏳ يُغلق بعد ' + durSec + 'ث (' + closeHMS + ')', 'signal');
+  }
+
+  // إغلاق صفقة — ربح/خسارة + الرصيد + العائد
+  function processCloseOrder(data) {
+    if (!data.deals || !data.deals.length) return;
+    if (data.deals.length > 1) { for (const d of data.deals) processCloseOrder({ deals: [d] }); return; }
+    const deal = data.deals[0];
+    const known = openOrders.has(deal.id);
+    const win = deal.profit > 0;
+    const ours = known;
+    if (deal.id) openOrders.delete(deal.id);
+    let payoutStr = '';
+    if (typeof deal.percentProfit === 'number' && deal.percentProfit >= 50 && deal.percentProfit <= 100) {
+      assetPayouts.set(normalizeAsset(deal.asset || activeAsset || ''), deal.percentProfit / 100);
+      payoutStr = ' | عائد ' + deal.percentProfit + '%';
+    }
+    const amt = win ? ('+' + (deal.profit || 0).toFixed(2)) : ('-' + (deal.amount || 0).toFixed(2));
+    if (ours) {
+      if (win) { winStats.wins++; winStats.profit += (deal.profit || 0); winStats.lossStreak = 0; }
+      else     { winStats.losses++; winStats.profit -= (deal.amount || 0); winStats.lossStreak++; }
+      log((win ? '✅ ربح' : '❌ خسارة') + ' #' + deal.id + ' | ' + amt + '$' +
+          ' | ' + (deal.openPrice ? deal.openPrice.toFixed(5) : '?') + '→' + ((deal.closePrice||deal.price||0).toFixed(5)) +
+          payoutStr + ' | سلسلة خسائر:' + winStats.lossStreak, win ? 'trade' : 'error');
+      // خسارتان مؤكدتان متتاليتان → تجميد مُطوّل (أقوى من إشارة انعكاس التيك)
+      if (!win && CFG.RISK_ENABLED && winStats.lossStreak >= CFG.STREAK_COOLDOWN) {
+        cooldownUntil = now() + CFG.STREAK_COOLDOWN_MS;
+        stats.cooldowns++;
+        log('🧊 ' + winStats.lossStreak + ' خسائر متتالية مؤكدة — تجميد ' + Math.round(CFG.STREAK_COOLDOWN_MS/1000) + 'ث', 'risk');
+      }
+    } else {
+      log('📊 صفقة منصة (غير البوت): ' + (deal.profit>0?'+':'') + (deal.profit || 0).toFixed(2) + '$', 'info');
+    }
+    updateHUD();
+  }
+
+  function onFailOrder(data) {
+    const errMap = { IncorrectMinAmount: 'الحد الأدنى $' + data.amount, IncorrectMaxAmount: 'الحد الأقصى $' + data.amount,
+                     InsufficientFunds: 'رصيد غير كافٍ', TradingDisabled: 'التداول معطّل', MarketClosed: 'السوق مغلق' };
+    log('❌ فشل فتح الأمر: ' + (errMap[data.error] || data.error || 'خطأ'), 'error');
+  }
+
+  function onBalanceUpdate(data) {
+    const prev = accountBalance;
+    accountBalance = data.balance;
+    if (data.isDemo !== undefined) isDemo = data.isDemo;
+    const diff = (prev != null) ? (data.balance - prev) : 0;
+    log('💵 رصيد: $' + (data.balance != null ? data.balance.toFixed(2) : '?') +
+        (Math.abs(diff) > 0.001 ? ' (' + (diff>0?'+':'') + diff.toFixed(2) + ')' : '') +
+        ' | ' + (data.isDemo ? 'ديمو' : 'حقيقي'), diff > 0 ? 'trade' : diff < 0 ? 'error' : 'info');
+    updateHUD();
+  }
+
+  function onMessage(role, raw, ws) {
     try {
       if (typeof raw === 'string') {
         if (raw === '2' || raw === '3') return;
+        // إطار «45X-["event",…]»: يحمل اسم الحدث لمرفق ثنائي قادم — خزّنه للمقبس
+        if (raw.startsWith('45')) {
+          const dash = raw.indexOf('-');
+          if (dash !== -1) {
+            try {
+              const arr = JSON.parse(raw.slice(dash + 1));
+              if (Array.isArray(arr) && typeof arr[0] === 'string' && ws) {
+                _pendingEv.set(ws, { name: arr[0], ts: now() });
+              }
+            } catch (_) {}
+          }
+          return;
+        }
         // إطار socket.io: 42["event",payload]
         if (raw.startsWith('42')) {
           let arr; try { arr = JSON.parse(raw.slice(2)); } catch (_) { arr = null; }
@@ -256,6 +365,9 @@
             handleDecodedEvent(role, evName, payload);
             const tick = extractTickFromArray(arr[1]);
             if (tick) onTick(role, tick.asset, tick.price, tick.ts);
+            else if (['updateStream','tick','quote','stream'].includes(evName) && Array.isArray(payload)) {
+              for (const item of payload) { const t = extractTickFromArray(Array.isArray(item)?item:[item]); if (t) onTick(role, t.asset, t.price, t.ts); }
+            }
           }
           return;
         }
@@ -269,31 +381,43 @@
         }
         return;
       }
-      // إطارات ثنائية
+      // إطارات ثنائية — مرفقات socket.io: اسم الحدث جاء في إطار نصي «45X-» سابق
       let buf = null;
       if (raw instanceof ArrayBuffer) buf = raw;
       else if (raw && raw.buffer instanceof ArrayBuffer) buf = raw.buffer;
       if (buf) {
         const d = decodeFrame(buf);
         if (d) {
+          // اسم الحدث المعلّق لهذا المقبس (TTL قصير)
+          let evName = 'binary';
+          const slot = ws ? _pendingEv.get(ws) : null;
+          if (slot && (now() - slot.ts) <= 5000) evName = slot.name || 'binary';
+          if (ws) _pendingEv.delete(ws);
+
           const tick = extractTickFromArray(d);
           if (tick) { onTick(role, tick.asset, tick.price, tick.ts); return; }
-          if (Array.isArray(d) && Array.isArray(d[0])) {
+          if (typeof d === 'object') handleDecodedEvent(role, evName, d);
+          if (Array.isArray(d) && Array.isArray(d[0]) && evName !== 'chafor' && evName !== 'updateAssets') {
             for (const it of d) { const t = extractTickFromArray(Array.isArray(it)?it:[it]); if (t) onTick(role, t.asset, t.price, t.ts); }
           }
         }
       } else if (raw instanceof Blob) {
-        raw.arrayBuffer().then((ab) => onMessage(role, ab)).catch(()=>{});
+        raw.arrayBuffer().then((ab) => onMessage(role, ab, ws)).catch(()=>{});
       }
     } catch (_) {}
   }
+
+  // أسماء الأحداث المعلّقة لكل مقبس: إطار «451-["successcloseOrder",…]» يسبق المرفق الثنائي
+  const _pendingEv = new Map();   // ws → { name, ts }
 
   function attachWS(ws, urlStr) {
     const role = _socketRole(urlStr);
     if (!role) return;
     ws._role = role;
     log((role==='oracle'?'🔮':'🔌') + ' مقبس ' + (role==='oracle'?'ORACLE':'MAIN') + ': ' + urlStr.split('?')[0], 'info');
-    ws.addEventListener('message', (e) => onMessage(role, e.data));
+    ws.addEventListener('message', (e) => onMessage(role, e.data, ws));
+    ws.addEventListener('close', () => log((role==='oracle'?'🔮':'🔌') + ' أُغلق مقبس ' + role.toUpperCase(), 'warn'));
+    ws.addEventListener('error', () => log('⚠️ خطأ مقبس ' + role.toUpperCase(), 'error'));
   }
 
   try {
@@ -794,7 +918,10 @@
     if (!okClick) { log('⛔ فشل النقر الفيزيائي', 'error'); return false; }
     lastClickMs = t;
     stats.entries++;
-    log('🟢 تنفيذ نقر: ' + (dir>0?'شراء/CALL':'بيع/PUT') + ' | ' + label + ' | سعر ' + lastPrice, 'trade');
+    _lastClick = { dir, t, label };   // لربط successopenOrder القادم بهذه النقرة
+    log('🟢 تنفيذ نقر: ' + (dir>0?'شراء/CALL':'بيع/PUT') + ' | ' + label +
+        ' | سعر ' + (lastPrice ? lastPrice.toFixed(5) : '?') +
+        ' | عمر ' + tradeDurSec() + 'ث | ' + (activeAsset||'?'), 'trade');
 
     // تفعيل مراقبة الانعكاس العنيف خلال عمر الصفقة
     const dur = tradeDurSec();
@@ -1068,6 +1195,8 @@
         <div class="cb-stat"><span class="cb-stat-lbl">⏱ عمر الصفقة</span><span class="cb-stat-val g" id="cbTradeDur">؟</span></div>
         <div class="cb-stat"><span class="cb-stat-lbl">ثانية الشمعة</span><span class="cb-stat-val y" id="cbCd">–</span></div>
         <div class="cb-stat"><span class="cb-stat-lbl">تيكات</span><span class="cb-stat-val" id="cbTickCount">0</span></div>
+        <div class="cb-stat"><span class="cb-stat-lbl">الرصيد</span><span class="cb-stat-val g" id="cbBalance">–</span></div>
+        <div class="cb-stat"><span class="cb-stat-lbl">💰 العائد</span><span class="cb-stat-val y" id="cbPayout">–</span></div>
       </div>
       <div class="cb-ind-row" title="اتجاه الشمعة الحالية (افتتاح مقابل السعر)">
         <span class="cb-ind-lbl">🕯️ الشمعة</span><span class="cb-ind-val" id="cbCandleVal">–</span>
@@ -1096,7 +1225,13 @@
         </div>
       </div>
       <div class="cb-stats-bar">
-        <div class="cb-stt"><span class="cb-stt-lbl">دخول ✅</span><span class="cb-stt-val g" id="cbEntries">0</span></div>
+        <div class="cb-stt"><span class="cb-stt-lbl">ربح ✅</span><span class="cb-stt-val g" id="cbWins">0</span></div>
+        <div class="cb-stt"><span class="cb-stt-lbl">خسارة ❌</span><span class="cb-stt-val r" id="cbLosses">0</span></div>
+        <div class="cb-stt"><span class="cb-stt-lbl">% الفوز</span><span class="cb-stt-val y" id="cbWinRate">–</span></div>
+        <div class="cb-stt"><span class="cb-stt-lbl">صافي $</span><span class="cb-stt-val b" id="cbProfit">0</span></div>
+      </div>
+      <div class="cb-stats-bar" style="padding-top:4px;">
+        <div class="cb-stt"><span class="cb-stt-lbl">دخول 🟢</span><span class="cb-stt-val g" id="cbEntries">0</span></div>
         <div class="cb-stt"><span class="cb-stt-lbl">محجوب ⛔</span><span class="cb-stt-val y" id="cbBlocked">0</span></div>
         <div class="cb-stt"><span class="cb-stt-lbl">انعكاس 🧊</span><span class="cb-stt-val r" id="cbReversals">0</span></div>
       </div>
@@ -1222,6 +1357,17 @@
     setTxt('cbEntries', stats.entries);
     setTxt('cbBlocked', stats.blocked);
     setTxt('cbReversals', stats.reversals);
+
+    // الرصيد + العائد + نتائج الصفقات الفعلية (من أحداث المنصة)
+    setTxt('cbBalance', accountBalance != null ? ('$' + accountBalance.toFixed(2) + (isDemo ? ' ديمو' : '')) : '–');
+    const pay = activeAsset && assetPayouts.has(activeAsset) ? Math.round(assetPayouts.get(activeAsset) * 100) + '%' : '–';
+    setTxt('cbPayout', pay);
+    setTxt('cbWins', winStats.wins);
+    setTxt('cbLosses', winStats.losses);
+    const totalTrades = winStats.wins + winStats.losses;
+    setTxt('cbWinRate', totalTrades ? Math.round(winStats.wins / totalTrades * 100) + '%' : '–');
+    const pf = $('cbProfit');
+    if (pf) { pf.textContent = (winStats.profit>=0?'+':'') + winStats.profit.toFixed(2); pf.className = 'cb-stt-val ' + (winStats.profit>=0?'g':'r'); }
 
     const dot = $('cbHdrDot'); if (dot) dot.className = 'cb-hdr-dot ' + (autoTrade ? 'on' : '');
     const idot = $('cbIconDot'); if (idot) idot.className = autoTrade ? 'on' : '';
