@@ -69,11 +69,13 @@ jq --slurpfile kit "$KIT_DIR/settings-hooks.json" '
   )
 ' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
 
-# تحذير من راوتر قديم مكرر
-if jq -r '[.hooks.UserPromptSubmit[]?.hooks[]?.command] | join("\n")' "$SETTINGS" \
-   | grep -iv axiom | grep -qi 'router\|skill'; then
-  echo "⚠️ يبدو أن لديك هوك راوتر قديماً في settings.json — عطّله حتى لا يتعارض مع Axiom Router:"
-  jq -r '[.hooks.UserPromptSubmit[]?.hooks[]?.command] | join("\n")' "$SETTINGS" | grep -iv axiom | grep -i 'router\|skill' | sed 's/^/     /'
+# تحذير من راوتر قديم مكرر — يفحص كل مسارات التخزين الشائعة للراوتر
+old_routers=$(jq -r '[.hooks.UserPromptSubmit[]?.hooks[]?.command] | join("\n")' "$SETTINGS" \
+   | grep -iv axiom | grep -iE 'router|skill.router|skill-router' || true)
+if [ -n "$old_routers" ]; then
+  echo "⚠️ اكتُشف راوتر قديم في settings.json (سيتعارض مع Axiom Router — عطّله يدوياً):"
+  echo "$old_routers" | sed 's/^/     /'
+  echo "   لتعطيله بسرعة: احذف السطر الخاص به من '$SETTINGS' ثم افتح جلسة جديدة."
 fi
 
 # ── 4) إضافة السياسات إلى CLAUDE.md ──────────────────────────────────────

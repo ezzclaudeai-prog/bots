@@ -12,10 +12,11 @@ MAX_DESC=280   # حد أقصى لطول الوصف في الفهرس حتى يب
 mkdir -p "$BRAIN_DIR"
 tmp="$(mktemp)"
 
-# مواقع المهارات: الشخصية، مهارات المشاريع الشائعة، ومهارات الإضافات
+# مواقع المهارات: الشخصية + المشاريع + الإضافات + core (يظهر في نسخة أكسيوم)
 {
-  find "$HOME/.claude/skills"  -maxdepth 3 -name 'SKILL.md' 2>/dev/null
-  find "$HOME/.claude/plugins" -maxdepth 8 -path '*/skills/*/SKILL.md' 2>/dev/null
+  find "$HOME/.claude/skills"      -maxdepth 3 -name 'SKILL.md' 2>/dev/null
+  find "$HOME/.claude/core/skills" -maxdepth 3 -name 'SKILL.md' 2>/dev/null
+  find "$HOME/.claude/plugins"     -maxdepth 8 -path '*/skills/*/SKILL.md' 2>/dev/null
 } | sort -u | while IFS= read -r f; do
   # استخراج name و description من الفرونت ماتر (يدعم القيم متعددة الأسطر >- و |)
   name=$(awk '
