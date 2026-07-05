@@ -108,6 +108,51 @@ description: >-
 يدوياً من أي مكان (حتى من موبايلك عبر github.com) — وستصل التعديلات لكلود
 في الجلسة التالية تلقائياً.
 
+## اكتشاف مهارات جاهزة من GitHub
+
+عندما تطلب شيئاً بنية مهارة (workflow متعدد الخطوات) ولا توجد مهارة محلية
+تخدمه، النظام لا يترك كلود يبني من الصفر — بل يعرف كيف يستكشف مهارات
+جاهزة من مصادر موثوقة:
+
+```
+انت: "حول هذا العرض PowerPoint إلى موقع سكرول متحرك بـ parallax"
+                     ↓
+الراوتر: لا توجد مهارة محلية → يُلمِّح لـ axiom-skill-scout
+                     ↓
+كلود يستدعي axiom-skill-scout تلقائياً
+                     ↓
+scout يشغّل discover-skills.sh "powerpoint scroll animated website"
+                     ↓
+يبحث في: anthropics/skills, obra/superpowers, awesome-claude-code, …
+                     ↓
+يعرض عليك 3 مرشحات مع أوصافها
+                     ↓
+تختار → install-skill.sh يعرض SKILL.md للمراجعة → موافقة → تثبيت
+                     ↓
+الفهرس يُبنى تلقائياً → المهارة الجديدة تُستدعى فوراً وتنفذ الطلب
+```
+
+**المصادر الافتراضية** (تُنشأ في `~/.claude/axiom/sources.txt` — عدّلها بحرية):
+
+- `anthropics/skills` — المهارات الرسمية من Anthropic
+- `obra/superpowers` — مهارات Superpowers الشهيرة
+- `hesreallyhim/awesome-claude-code` — قائمة المجتمع
+- `davila7/claude-code-templates` — قوالب متنوعة
+- `zebbern/claude-code-guide` — دليل شامل
+
+كل مستودع تضيفه إلى `sources.txt` يُعامَل موثوقاً — `install-skill.sh` سيقبل
+تثبيت مهاراته دون سؤال. أضف بحذر.
+
+### للاستخدام اليدوي أيضاً
+
+```bash
+# ابحث فقط بلا تثبيت
+bash ~/.claude/axiom/scripts/discover-skills.sh "pdf export"
+
+# ثبّت مهارة معينة (يعرض SKILL.md قبل التطبيق)
+bash ~/.claude/axiom/scripts/install-skill.sh anthropics/skills pdf-tools
+```
+
 ## تحسين أوصاف المهارات (اختياري لكن قوي)
 
 الراوتر يعتمد كلياً على **حقل description** في كل مهارة — إن كان ناقصاً أو غامضاً،
@@ -157,5 +202,8 @@ axiom-kit/
 ├── scripts/
 │   ├── build-skill-index.sh  بناء فهرس المهارات من SKILL.md
 │   └── reflect.sh            وحدة التعلم (تأمل + تحديث العقل + push)
-└── brain-template/         القالب الأولي للعقل الثاني
+├── brain-template/         القالب الأولي للعقل الثاني
+└── skill-templates/
+    └── axiom-skill-scout/  ميتا-مهارة تُثبَّت مع الكيت
+                            (تعلّم كلود متى يبحث خارجياً وكيف)
 ```

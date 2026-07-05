@@ -28,6 +28,18 @@ cp -r "$KIT_DIR/hooks"   "$AXIOM_DIR/"
 cp -r "$KIT_DIR/scripts" "$AXIOM_DIR/"
 chmod +x "$AXIOM_DIR"/hooks/*.sh "$AXIOM_DIR"/scripts/*.sh
 
+# نسخ ميتا-مهارة الاستكشاف الخارجي (يستدعيها كلود تلقائياً عبر الراوتر)
+if [ -d "$KIT_DIR/skill-templates" ]; then
+  for tmpl in "$KIT_DIR/skill-templates"/*/; do
+    tmpl_name=$(basename "$tmpl")
+    dest="$HOME/.claude/skills/$tmpl_name"
+    if [ ! -d "$dest" ]; then
+      cp -r "$tmpl" "$dest"
+      echo "  📦 مهارة مثبتة: $tmpl_name"
+    fi
+  done
+fi
+
 # ── 2) تجهيز العقل الثاني ────────────────────────────────────────────────
 if [ -d "$BRAIN_DIR/.git" ]; then
   say "العقل الثاني موجود مسبقاً في $BRAIN_DIR — لن يُلمس"
