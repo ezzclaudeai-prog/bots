@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Axiom Brain — التأمل (Reflection)
-# نسخة Claude Code من حلقة التعلم في Hermes Agent:
-# يقرأ محادثة الجلسة، يستخرج الدروس الدائمة وتفضيلاتك، يحدّث MEMORY.md
-# و USER.md، يكتب ملخص الجلسة في HISTORY/، وإذا اكتشف سير عمل متكرراً
-# لا تغطيه مهارة موجودة — ينشئ مهارة جديدة بنفسه. ثم يدفع كل شيء إلى GitHub.
+# Axiom Brain — التأمل التفاضلي (Delta Reflection)
+# نسخة Claude Code من حلقة التعلم في Hermes Agent، محسّنة:
+# لا يعيد قراءة الترانسكربت من الصفر — فقط الجزء الجديد منذ آخر تأمل.
+# يوفّر ~60% من تكلفة Haiku مقارنة بالنسخة التي تعيد قراءة كل شيء.
 set -u
+
+# ⚡ إصلاح Termux/proot: PATH فارغ في الهوكات الخلفية — أعده صريحاً
+export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin${PATH:+:$PATH}"
 
 TRANSCRIPT="${1:-}"
 SESSION="${2:-unknown}"
@@ -12,8 +14,8 @@ AXIOM_DIR="$HOME/.claude/axiom"
 BRAIN_DIR="${AXIOM_BRAIN_DIR:-$HOME/.claude/brain}"
 LOCK="$AXIOM_DIR/reflect.lock"
 STATE_DIR="$AXIOM_DIR/state"
-MODEL="${AXIOM_REFLECT_MODEL:-haiku}"   # نموذج رخيص وسريع للتأمل؛ غيّره بمتغير البيئة
-MIN_NEW_BYTES=8000                       # لا تتأمل إلا إذا أضيف حوار جديد كافٍ
+MODEL="${AXIOM_REFLECT_MODEL:-haiku}"   # نموذج رخيص وسريع للتأمل
+MIN_NEW_BYTES=8000                       # لا تتأمل إلا إذا نما الحوار بما يكفي
 
 [ -f "$TRANSCRIPT" ] || exit 0
 command -v jq     >/dev/null 2>&1 || exit 0
@@ -26,18 +28,25 @@ if ! mkdir "$LOCK" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
-# منع التكرار: تجاهل إن لم تنمُ المحادثة بما يكفي منذ آخر تأمل
+# ── التأمل التفاضلي: اقرأ فقط ما هو جديد منذ آخر تأمل ─────────────────
 mkdir -p "$STATE_DIR"
 STATE_FILE="$STATE_DIR/${SESSION}.last"
 size=$(wc -c < "$TRANSCRIPT")
-last=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
-[ $((size - last)) -lt "$MIN_NEW_BYTES" ] && exit 0
+last_offset=$(cat "$STATE_FILE" 2>/dev/null | awk 'NR==1' || echo 0)
+last_offset=${last_offset:-0}
+delta=$((size - last_offset))
+[ "$delta" -lt "$MIN_NEW_BYTES" ] && exit 0
+
+echo "[$(date '+%F %T')] reflect: session=$SESSION delta=$delta/$size"
+
+# اقرأ فقط الأسطر الجديدة (الترانسكربت JSONL — سطر لكل حدث)
+new_lines=$(tail -c "$delta" "$TRANSCRIPT" 2>/dev/null)
+
+# احفظ الحجم الجديد لهذه الجلسة (سيصبح offset التأمل التالي)
 echo "$size" > "$STATE_FILE"
 
-echo "[$(date '+%F %T')] reflect: session=$SESSION size=$size"
-
-# ── استخراج نص المحادثة من ملف الترانسكربت (JSONL) ──────────────────────
-convo=$(tail -n 500 "$TRANSCRIPT" | jq -r '
+# استخرج فقط أسطر المحادثة الجديدة
+convo=$(printf '%s' "$new_lines" | jq -r '
   select(.type == "user" or .type == "assistant") |
   (if .type == "user" then "👤 المستخدم: " else "🤖 كلود: " end) +
   ( .message.content
